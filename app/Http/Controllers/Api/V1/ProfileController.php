@@ -7,6 +7,7 @@ use App\Http\Requests\Auth\ChangePasswordRequest;
 use App\Http\Requests\Auth\UpdateProfileRequest;
 use App\Http\Resources\UserResource;
 use App\Services\AuthService;
+use Illuminate\Http\JsonResponse;
 
 class ProfileController extends Controller
 {
@@ -14,20 +15,24 @@ class ProfileController extends Controller
     {
     }
 
-    public function show()
+    public function show(): JsonResponse
     {
-        return api_response(true, 'Profile fetched successfully.', new UserResource(request()->user()));
+        return api_response(true, 'Profile fetched successfully.', [
+            'user' => new UserResource(request()->user()),
+        ]);
     }
 
-    public function update(UpdateProfileRequest $request)
+    public function update(UpdateProfileRequest $request): JsonResponse
     {
         $user = $request->user();
         $user->update($request->validated());
 
-        return api_response(true, 'Profile updated successfully.', new UserResource($user->refresh()));
+        return api_response(true, 'Profile updated successfully.', [
+            'user' => new UserResource($user->refresh()),
+        ]);
     }
 
-    public function changePassword(ChangePasswordRequest $request)
+    public function changePassword(ChangePasswordRequest $request): JsonResponse
     {
         $this->authService->changePassword(
             $request->user(),

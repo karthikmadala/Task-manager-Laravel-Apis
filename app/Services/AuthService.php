@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\User;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\ValidationException;
 
@@ -10,34 +11,23 @@ class AuthService
 {
     public function register(array $data): array
     {
-        $user = User::create([
-            'name' => $data['name'],
-            'email' => $data['email'],
-            'password' => Hash::make($data['password']),
-            'address' => $data['address'] ?? null,
-            'phone' => $data['phone'] ?? null,
-            'city' => $data['city'] ?? null,
-            'zip' => $data['zip'] ?? null,
-            'consent_checkbox' => $data['consent_checkbox'] ?? false,
-            'role' => 'user',
-        ]);
+        $user = DB::transaction(function () use ($data): User {
+            return User::create([
+                'name' => $data['name'],
+                'email' => strtolower($data['email']),
+                'password' => Hash::make($data['password']),
+                'role' => 'user',
+            ]);
+        });
 
-        $token = $user->createToken(
-            $data['device_name'] ?? 'api-token',
-            ['*'],
-            now()->addMinutes((int) config('sanctum.expiration', 60))
-        );
-
-        return [
-            'user' => $user,
-            'token' => $token->plainTextToken,
-            'token_expires_at' => optional($token->accessToken->expires_at)?->toISOString(),
-        ];
+        return $this->issueToken($user, $data['device_name'] ?? 'api-token');
     }
 
     public function login(array $data): array
     {
-        $user = User::query()->where('email', $data['email'])->first();
+        $user = User::query()
+            ->where('email', strtolower($data['email']))
+            ->first();
 
         if (! $user || ! Hash::check($data['password'], $user->password)) {
             throw ValidationException::withMessages([
@@ -45,17 +35,19 @@ class AuthService
             ]);
         }
 
-        $token = $user->createToken(
-            $data['device_name'] ?? 'api-token',
-            ['*'],
-            now()->addMinutes((int) config('sanctum.expiration', 60))
-        );
+        return $this->issueToken($user, $data['device_name'] ?? 'api-token');
+    }
 
-        return [
-            'user' => $user,
-            'token' => $token->plainTextToken,
-            'token_expires_at' => optional($token->accessToken->expires_at)?->toISOString(),
-        ];
+    public function refresh(User $user): array
+    {
+        $current = $user->currentAccessToken();
+        $deviceName = $current?->name ?? 'api-token';
+
+        if ($current) {
+            $current->delete();
+        }
+
+        return $this->issueToken($user, $deviceName);
     }
 
     public function logout(User $user): void
@@ -63,7 +55,7 @@ class AuthService
         $token = $user->currentAccessToken();
 
         if ($token) {
-            $token->forceFill(['expires_at' => now()])->save();
+            $token->delete();
         }
     }
 
@@ -76,5 +68,31 @@ class AuthService
         }
 
         $user->forceFill(['password' => Hash::make($newPassword)])->save();
+        $user->tokens()->delete();
+    }
+
+    /** Issue a token for an externally-authenticated user (e.g. MetaMask). */
+    public function issueTokenPublic(User $user, string $deviceName = 'metamask'): array
+    {
+        return $this->issueToken($user, $deviceName);
+    }
+
+    private function issueToken(User $user, string $deviceName): array
+    {
+        $user->tokens()
+            ->where('name', $deviceName)
+            ->delete();
+
+        $token = $user->createToken(
+            $deviceName,
+            ['api:access'],
+            now()->addMinutes((int) config('sanctum.expiration', 10080))
+        );
+
+        return [
+            'user'             => $user,
+            'token'            => $token->plainTextToken,
+            'token_expires_at' => $token->accessToken->expires_at?->toISOString(),
+        ];
     }
 }

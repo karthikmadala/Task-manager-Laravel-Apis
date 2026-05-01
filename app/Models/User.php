@@ -15,13 +15,8 @@ class User extends Authenticatable
     protected $fillable = [
         'name',
         'email',
-        'address',
-        'phone',
-        'city',
-        'zip',
-        'role',
-        'consent_checkbox',
         'password',
+        'role',
     ];
 
     protected $hidden = [
@@ -34,13 +29,17 @@ class User extends Authenticatable
         return [
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
-            'consent_checkbox' => 'boolean',
         ];
     }
 
-    public function tasks(): HasMany
+    public function wallets(): HasMany
     {
-        return $this->hasMany(Task::class);
+        return $this->hasMany(Wallet::class);
+    }
+
+    public function transactions(): HasMany
+    {
+        return $this->hasMany(Transaction::class);
     }
 
     public function isAdmin(): bool

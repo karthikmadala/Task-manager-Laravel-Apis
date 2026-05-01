@@ -13,31 +13,19 @@ class UserSeeder extends Seeder
         User::query()->firstOrCreate(
             ['email' => 'admin@example.com'],
             [
-                'name' => 'System Admin',
+                'name'     => 'System Admin',
                 'password' => Hash::make('password'),
-                'role' => 'admin',
-                'address' => 'HQ',
-                'phone' => '0000000000',
-                'city' => 'AdminCity',
-                'zip' => '00000',
-                'consent_checkbox' => true,
+                'role'     => 'admin',
             ]
         );
 
         User::query()->firstOrCreate(
             ['email' => 'user@example.com'],
             [
-                'name' => 'Demo User',
+                'name'     => 'Demo User',
                 'password' => Hash::make('password'),
-                'role' => 'user',
-                'address' => 'Demo Street',
-                'phone' => '1111111111',
-                'city' => 'UserCity',
-                'zip' => '11111',
-                'consent_checkbox' => true,
+                'role'     => 'user',
             ]
         );
-
-        User::factory()->count(8)->create();
     }
 }

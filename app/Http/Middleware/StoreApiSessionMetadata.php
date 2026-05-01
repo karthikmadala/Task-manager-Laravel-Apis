@@ -4,8 +4,7 @@ namespace App\Http\Middleware;
 
 use Closure;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Cache;
 
 class StoreApiSessionMetadata
 {
@@ -15,7 +14,7 @@ class StoreApiSessionMetadata
 
         $user = $request->user();
 
-        if (! $user || ! Schema::hasTable('sessions')) {
+        if (! $user) {
             return $response;
         }
 
@@ -29,22 +28,19 @@ class StoreApiSessionMetadata
             (string) $request->userAgent(),
         ]));
 
-        DB::table('sessions')->updateOrInsert(
-            ['id' => $sessionId],
+        Cache::put(
+            "api-session-metadata:{$sessionId}",
             [
                 'user_id' => $user->id,
+                'token_id' => $tokenId,
                 'ip_address' => $request->ip(),
                 'user_agent' => $request->userAgent(),
-                'payload' => base64_encode(json_encode([
-                    'type' => 'api_session',
-                    'token_id' => $tokenId,
-                    'method' => $request->method(),
-                    'path' => $request->path(),
-                    'route_name' => $request->route()?->getName(),
-                    'updated_at' => now()->toISOString(),
-                ])),
-                'last_activity' => now()->timestamp,
-            ]
+                'method' => $request->method(),
+                'path' => $request->path(),
+                'status_code' => $response->getStatusCode(),
+                'updated_at' => now()->toIso8601String(),
+            ],
+            now()->addMinutes((int) config('session.lifetime', 120))
         );
 
         return $response;
