@@ -56,6 +56,10 @@ return [
     |--------------------------------------------------------------------------
     */
     'explorer' => [
+        'v2' => [
+            'url' => env('ETHERSCAN_API_URL_V2', 'https://api.etherscan.io/v2/api'),
+            'key' => env('ETHERSCAN_API_KEY'),
+        ],
         'eth' => [
             'url' => env('APP_ENV') === 'local'
                 ? env('ETHERSCAN_API_URL_TESTNET', 'https://api-sepolia.etherscan.io/api')

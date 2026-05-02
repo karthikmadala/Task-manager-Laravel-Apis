@@ -2,12 +2,19 @@
 
 namespace App\Providers;
 
+use App\Models\Transaction;
 use App\Models\Wallet;
+use App\Policies\TransactionPolicy;
 use App\Policies\WalletPolicy;
+use App\Repositories\Contracts\TransactionRepositoryInterface;
 use App\Repositories\Contracts\WalletRepositoryInterface;
+use App\Repositories\Eloquent\TransactionRepository;
 use App\Repositories\Eloquent\WalletRepository;
 use App\Services\Crypto\Contracts\EvmRpcServiceInterface;
 use App\Services\Crypto\EvmRpcService;
+use App\Services\GasEstimationService;
+use App\Services\TransactionBroadcastService;
+use App\Services\TransactionMonitorService;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
@@ -19,15 +26,28 @@ class AppServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app->bind(WalletRepositoryInterface::class, WalletRepository::class);
+        $this->app->bind(TransactionRepositoryInterface::class, TransactionRepository::class);
 
-        $this->app->bind(EvmRpcServiceInterface::class, fn() =>
+        // Build one Guzzle client shared across all crypto services
+        $this->app->singleton(EvmRpcService::class, fn() =>
             new EvmRpcService(EvmRpcService::buildRetryClient())
         );
+
+        // Interface resolves to the same singleton
+        $this->app->bind(EvmRpcServiceInterface::class, fn($app) =>
+            $app->make(EvmRpcService::class)
+        );
+
+        // Register transaction services as singletons (EvmRpcService is now resolvable)
+        $this->app->singleton(GasEstimationService::class);
+        $this->app->singleton(TransactionBroadcastService::class);
+        $this->app->singleton(TransactionMonitorService::class);
     }
 
     public function boot(): void
     {
         Gate::policy(Wallet::class, WalletPolicy::class);
+        Gate::policy(Transaction::class, TransactionPolicy::class);
 
         RateLimiter::for('auth', function (Request $request) {
             return Limit::perMinute(10)->by(

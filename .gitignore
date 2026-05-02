@@ -26,3 +26,5 @@ composer.lock
 /tests
 /docs
 CLAUDE.md
+graphify-out
+.claude

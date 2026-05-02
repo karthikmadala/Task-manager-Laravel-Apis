@@ -42,7 +42,6 @@ class WalletRepository implements WalletRepositoryInterface
     {
         return Wallet::query()
             ->where('address', strtolower($address))
-            ->where('chain_type', 'eth')
             ->where('wallet_type', 'metamask')
             ->where('is_active', true)
             ->first();

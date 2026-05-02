@@ -64,24 +64,41 @@ class PortfolioController extends Controller
             return api_response(false, 'Invalid chain type.', [], null, 400);
         }
 
-        // Get all active wallets for the requested chain
+        // Get all active wallets, then slice balances by requested chain
         $wallets = $user->wallets()
             ->where('is_active', true)
-            ->where('chain_type', $chainEnum->value)
             ->with(['balances.token'])
             ->get();
 
         $totalUsd = '0';
-        $walletData = $wallets->map(function (Wallet $wallet) use (&$totalUsd, $refresh) {
+        $walletData = $wallets->map(function (Wallet $wallet) use (&$totalUsd, $refresh, $chainEnum) {
             $breakdown = $this->portfolioService->getWalletPortfolio($wallet, $refresh);
-            $totalUsd  = bcadd($totalUsd, $breakdown['total_value_usd'], 8);
+            $balances = array_values(array_filter(
+                $breakdown['balances'],
+                fn (array $balance): bool => ($balance['chain_type'] ?? null) === $chainEnum->value
+            ));
 
-            return $breakdown;
+            if (empty($balances)) {
+                return null;
+            }
+
+            $walletTotal = '0';
+            foreach ($balances as $balance) {
+                $walletTotal = bcadd($walletTotal, (string) ($balance['value_usd'] ?? '0'), 8);
+            }
+
+            $totalUsd = bcadd($totalUsd, $walletTotal, 8);
+
+            return [
+                'wallet' => $breakdown['wallet'],
+                'balances' => $balances,
+                'total_value_usd' => number_format((float) $walletTotal, 2, '.', ''),
+            ];
         });
 
         return api_response(true, 'Chain portfolio retrieved.', [
             'total_value_usd' => number_format((float) $totalUsd, 2, '.', ''),
-            'wallets'         => $walletData->values()->all(),
+            'wallets'         => $walletData->filter()->values()->all(),
         ]);
     }
 }

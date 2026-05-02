@@ -2,8 +2,9 @@
 
 namespace App\Jobs;
 
+use App\Enums\ChainType;
 use App\Models\Token;
-use App\Services\Crypto\CoinGeckoService;
+use App\Services\Crypto\ExplorerService;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Log;
@@ -14,64 +15,52 @@ class FetchTokenPricesJob implements ShouldQueue
 
     public int $tries = 3;
 
-    /**
-     * Back-off respects CoinGecko's rate-limit window (60s for demo keys).
-     *
-     * @var array<int, int>
-     */
-    public array $backoff = [60, 120, 300];
+    public array $backoff = [30, 60, 120];
 
-    /**
-     * Prevent overlapping price-fetch jobs from stacking in the queue.
-     * One fetch run at a time — 10 minutes is well within the CoinGecko cache TTL.
-     */
     public int $uniqueFor = 600;
 
-    /**
-     * @param  array<string>|null  $coingeckoIds  Specific IDs to refresh; null → all tokens in DB.
-     */
     public function __construct(private readonly ?array $coingeckoIds = null)
     {
         $this->onQueue('default');
     }
 
-    public function handle(CoinGeckoService $coinGecko): void
+    public function handle(ExplorerService $explorer): void
     {
-        $ids = $this->resolveIds();
-
-        if (empty($ids)) {
-            Log::info('FetchTokenPricesJob: no tokens to update, skipping');
-            return;
-        }
-
-        Log::info('FetchTokenPricesJob: fetching prices', ['token_count' => count($ids)]);
-
-        $prices = $coinGecko->refreshPrices($ids);
-
-        if (empty($prices)) {
-            Log::warning('FetchTokenPricesJob: CoinGecko returned empty prices, aborting DB update');
-            return;
-        }
-
+        $nativeChains = [ChainType::ETH, ChainType::BNB, ChainType::POLYGON];
         $updated = 0;
-        foreach ($prices as $coinGeckoId => $priceUsd) {
-            if ($priceUsd === null) {
-                continue;
-            }
 
-            $rows = Token::where('coingecko_id', $coinGeckoId)->get();
-            foreach ($rows as $token) {
+        foreach ($nativeChains as $chain) {
+            try {
+                $price = $explorer->getNativeTokenPriceUsd($chain);
+
+                if ($price === null) {
+                    continue;
+                }
+
+                $token = Token::where('chain_type', $chain->value)
+                    ->whereNull('contract_address')
+                    ->first();
+
+                if (! $token) {
+                    continue;
+                }
+
                 $token->update([
-                    'current_price_usd' => $priceUsd,
-                    'price_updated_at'  => now(),
+                    'current_price_usd' => $price,
+                    'price_updated_at' => now(),
                 ]);
                 $updated++;
+            } catch (\Throwable $e) {
+                Log::warning('FetchTokenPricesJob: explorer price refresh failed', [
+                    'chain' => $chain->value,
+                    'error' => $e->getMessage(),
+                ]);
             }
         }
 
-        Log::info('FetchTokenPricesJob: prices updated', [
+        Log::info('FetchTokenPricesJob: explorer native prices updated', [
             'updated_tokens' => $updated,
-            'price_count'    => count($prices),
+            'note' => 'ERC-20 prices are resolved live from explorer address holdings during portfolio sync.',
         ]);
     }
 
@@ -82,30 +71,11 @@ class FetchTokenPricesJob implements ShouldQueue
         ]);
     }
 
-    /**
-     * Unique job identifier — only one global price-fetch job at a time.
-     * Scoped to the sorted ID list so targeted refreshes don't block full sweeps.
-     */
     public function uniqueId(): string
     {
-        $ids = $this->resolveIds();
+        $ids = $this->coingeckoIds ?? [];
         sort($ids);
+
         return 'fetch-token-prices:' . md5(implode(',', $ids));
-    }
-
-    /**
-     * @return array<string>
-     */
-    private function resolveIds(): array
-    {
-        if ($this->coingeckoIds !== null) {
-            return array_values(array_filter($this->coingeckoIds));
-        }
-
-        return Token::whereNotNull('coingecko_id')
-            ->pluck('coingecko_id')
-            ->unique()
-            ->values()
-            ->all();
     }
 }

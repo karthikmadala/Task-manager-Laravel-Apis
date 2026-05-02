@@ -57,7 +57,7 @@ class PortfolioService
         }
 
         return Cache::remember($cacheKey, self::CACHE_TTL, function () use ($wallet): array {
-            $wallet->loadMissing('balances.token');
+            $wallet->load('balances.token');
 
             return $this->buildWalletResponse($wallet);
         });
@@ -66,7 +66,7 @@ class PortfolioService
     /**
      * Return aggregated portfolio across all active wallets for a user.
      *
-     * @return array{ total_value_usd: string, wallet_count: int, wallets: array }
+     * @return array{ total_value_usd: string, wallet_count: int, grouped_wallet_count: int, wallets: array, grouped_wallets: array, chain_totals: array }
      */
     public function getPortfolio(User $user, bool $refresh = false): array
     {
@@ -87,11 +87,16 @@ class PortfolioService
 
                 return $breakdown;
             });
+            $walletItems = $walletData->values()->all();
+            $groupedWallets = $this->groupWalletResponsesByAddress($walletItems);
 
             return [
                 'total_value_usd' => $this->formatUsd($totalUsd),
                 'wallet_count'    => $wallets->count(),
-                'wallets'         => $walletData->values()->all(),
+                'grouped_wallet_count' => count($groupedWallets),
+                'wallets'         => $walletItems,
+                'grouped_wallets' => $groupedWallets,
+                'chain_totals'    => $this->computeChainTotals($walletItems),
             ];
         });
     }
@@ -120,11 +125,14 @@ class PortfolioService
             $rawBalances = $chain === ChainType::BTC
                 ? $this->fetchBtcRawBalances($address, $tokens)
                 : $this->fetchEvmRawBalances($address, $chain, $tokens);
+            $priceMap = $chain === ChainType::BTC
+                ? []
+                : $this->explorer->getUsdPriceMapForTokens($address, $chain, $tokens);
 
-            return $tokens->map(function (Token $token) use ($rawBalances): array {
+            return $tokens->map(function (Token $token) use ($rawBalances, $priceMap, $chain): array {
                 $raw      = $rawBalances[$token->id] ?? '0';
                 $balance  = $this->evmRpc->toDecimalUnits($raw, $token->decimals);
-                $price    = $token->current_price_usd;
+                $price    = $this->resolveTokenPriceUsd($token, $priceMap, $chain);
                 $valueUsd = $price !== null
                     ? $this->formatUsd(bcmul($balance, (string) $price, 8))
                     : null;
@@ -148,28 +156,12 @@ class PortfolioService
     public function syncWallet(Wallet $wallet): void
     {
         try {
-            $tokens = Token::where('chain_type', $wallet->chain_type->value)->get();
-
-            if ($tokens->isEmpty()) {
-                return;
-            }
-
-            $rawBalances = $wallet->chain_type === ChainType::BTC
-                ? $this->fetchBtcRawBalances($wallet->address, $tokens)
-                : $this->fetchEvmRawBalances($wallet->address, $wallet->chain_type, $tokens);
-
-            foreach ($tokens as $token) {
-                $raw      = $rawBalances[$token->id] ?? '0';
-                $balance  = $this->evmRpc->toDecimalUnits($raw, $token->decimals);
-                $price    = $token->current_price_usd;
-                $valueUsd = $price !== null
-                    ? bcmul($balance, (string) $price, 8)
-                    : null;
-
-                WalletBalance::updateOrCreate(
-                    ['wallet_id' => $wallet->id, 'token_id' => $token->id],
-                    ['balance' => $balance, 'balance_usd' => $valueUsd, 'fetched_at' => now()],
-                );
+            if ($wallet->chain_type === ChainType::BTC) {
+                $this->syncWalletChain($wallet, ChainType::BTC);
+            } else {
+                foreach ($this->evmChains() as $chain) {
+                    $this->syncWalletChain($wallet, $chain);
+                }
             }
 
             Cache::forget("portfolio:{$wallet->id}");
@@ -195,12 +187,14 @@ class PortfolioService
     {
         $totalUsd   = '0';
         $lastSynced = null;
-
         $balances = $wallet->balances
             ->filter(fn(WalletBalance $wb) => bccomp((string) $wb->balance, '0', 18) > 0)
             ->sortByDesc(fn(WalletBalance $wb) => (float) ($wb->balance_usd ?? '0'))
             ->map(function (WalletBalance $wb) use (&$totalUsd, &$lastSynced): array {
-                $valueUsd = (string) ($wb->balance_usd ?? '0');
+                $price = $this->resolveWalletBalancePriceUsd($wb);
+                $valueUsd = $price !== null
+                    ? bcmul((string) $wb->balance, (string) $price, 8)
+                    : (string) ($wb->balance_usd ?? '0');
                 $totalUsd = bcadd($totalUsd, $valueUsd, 8);
 
                 if ($lastSynced === null || $wb->fetched_at?->gt($lastSynced)) {
@@ -208,12 +202,13 @@ class PortfolioService
                 }
 
                 return [
-                    'symbol'         => $wb->token->symbol,
-                    'name'           => $wb->token->name,
-                    'contract'       => $wb->token->contract_address,
-                    'balance'        => (string) $wb->balance,
-                    'price_usd'      => $wb->token->current_price_usd,
-                    'value_usd'      => $this->formatUsd($valueUsd),
+                    'chain_type' => $wb->chain_type?->value,
+                    'symbol' => $wb->token->symbol,
+                    'name' => $wb->token->name,
+                    'contract' => $wb->token->contract_address,
+                    'balance' => (string) $wb->balance,
+                    'price_usd' => $price,
+                    'value_usd' => $this->formatUsd($valueUsd),
                     'last_synced_at' => $wb->fetched_at?->toISOString(),
                 ];
             })
@@ -386,5 +381,162 @@ class PortfolioService
     private function formatUsd(string $value): string
     {
         return number_format((float) $value, 2, '.', '');
+    }
+
+    /**
+     * @param  array<int, array{wallet: array, balances: array, total_value_usd: string}>  $wallets
+     * @return array<int, array<string, mixed>>
+     */
+    private function groupWalletResponsesByAddress(array $wallets): array
+    {
+        $grouped = [];
+
+        foreach ($wallets as $walletPortfolio) {
+            $wallet = $walletPortfolio['wallet'];
+            $addressKey = strtolower((string) $wallet['address']);
+
+            if (! isset($grouped[$addressKey])) {
+                $grouped[$addressKey] = [
+                    'address' => $wallet['address'],
+                    'label' => $wallet['label'],
+                    'total_value_usd' => '0.00',
+                    'chains' => [],
+                    'wallets' => [],
+                    'balances' => [],
+                    'main_id' => $wallet['id'],
+                ];
+            }
+
+            $grouped[$addressKey]['chains'][] = $wallet['chain_type'];
+            $grouped[$addressKey]['wallets'][] = $walletPortfolio;
+            $grouped[$addressKey]['total_value_usd'] = $this->formatUsd(bcadd(
+                $grouped[$addressKey]['total_value_usd'],
+                (string) $walletPortfolio['total_value_usd'],
+                8
+            ));
+
+            foreach ($walletPortfolio['balances'] as $balance) {
+                $grouped[$addressKey]['balances'][] = array_merge($balance, [
+                    'chain' => $wallet['chain_type'],
+                ]);
+            }
+        }
+
+        foreach ($grouped as &$group) {
+            $group['chains'] = array_values(array_unique($group['chains']));
+            usort($group['balances'], function (array $left, array $right): int {
+                return (float) ($right['value_usd'] ?? '0') <=> (float) ($left['value_usd'] ?? '0');
+            });
+        }
+        unset($group);
+
+        usort($grouped, function (array $left, array $right): int {
+            return (float) ($right['total_value_usd'] ?? '0') <=> (float) ($left['total_value_usd'] ?? '0');
+        });
+
+        return array_values($grouped);
+    }
+
+    /**
+     * @param  array<string, float|null>  $priceMap
+     */
+    private function resolveTokenPriceUsd(Token $token, array $priceMap, ChainType $chain): ?float
+    {
+        if ($token->isNative()) {
+            return $priceMap[$this->explorer->nativePriceMapKey($chain)] ?? $token->current_price_usd;
+        }
+
+        $contract = strtolower((string) $token->contract_address);
+
+        return $priceMap[$contract] ?? $token->current_price_usd;
+    }
+
+    private function resolveWalletBalancePriceUsd(WalletBalance $walletBalance): ?float
+    {
+        if ($walletBalance->token->current_price_usd !== null) {
+            return (float) $walletBalance->token->current_price_usd;
+        }
+
+        if (bccomp((string) $walletBalance->balance, '0', 18) === 0) {
+            return null;
+        }
+
+        if ($walletBalance->balance_usd === null) {
+            return null;
+        }
+
+        return (float) bcdiv((string) $walletBalance->balance_usd, (string) $walletBalance->balance, 8);
+    }
+
+    /**
+     * @param  array<int, array{wallet: array, balances: array, total_value_usd: string}>  $walletItems
+     * @return array<int, array{chain_type: string, total_value_usd: string}>
+     */
+    private function computeChainTotals(array $walletItems): array
+    {
+        $totals = [];
+
+        foreach ($walletItems as $walletItem) {
+            foreach ($walletItem['balances'] as $balance) {
+                $chain = $balance['chain_type'] ?? $walletItem['wallet']['chain_type'];
+                if (! isset($totals[$chain])) {
+                    $totals[$chain] = '0';
+                }
+
+                $totals[$chain] = bcadd($totals[$chain], (string) ($balance['value_usd'] ?? '0'), 8);
+            }
+        }
+
+        $ordered = [];
+        foreach ([ChainType::ETH, ChainType::BNB, ChainType::POLYGON, ChainType::BTC] as $chain) {
+            if (! isset($totals[$chain->value])) {
+                continue;
+            }
+
+            $ordered[] = [
+                'chain_type' => $chain->value,
+                'total_value_usd' => $this->formatUsd($totals[$chain->value]),
+            ];
+        }
+
+        return $ordered;
+    }
+
+    private function syncWalletChain(Wallet $wallet, ChainType $chain): void
+    {
+        $tokens = Token::where('chain_type', $chain->value)->get();
+
+        if ($tokens->isEmpty()) {
+            return;
+        }
+
+        $rawBalances = $chain === ChainType::BTC
+            ? $this->fetchBtcRawBalances($wallet->address, $tokens)
+            : $this->fetchEvmRawBalances($wallet->address, $chain, $tokens);
+        $priceMap = $chain === ChainType::BTC
+            ? []
+            : $this->explorer->getUsdPriceMapForTokens($wallet->address, $chain, $tokens);
+
+        foreach ($tokens as $token) {
+            $raw      = $rawBalances[$token->id] ?? '0';
+            $balance  = $this->evmRpc->toDecimalUnits($raw, $token->decimals);
+            $price    = $chain === ChainType::BTC ? $token->current_price_usd : $this->resolveTokenPriceUsd($token, $priceMap, $chain);
+            $valueUsd = $price !== null
+                ? bcmul($balance, (string) $price, 8)
+                : null;
+
+            WalletBalance::updateOrCreate(
+                ['wallet_id' => $wallet->id, 'chain_type' => $chain->value, 'token_id' => $token->id],
+                ['balance' => $balance, 'balance_usd' => $valueUsd, 'fetched_at' => now()],
+            );
+        }
+    }
+
+    /**
+     * @return array<int, ChainType>
+     */
+    private function evmChains(): array
+    {
+        return [ChainType::ETH, ChainType::BNB, ChainType::POLYGON];
     }
 }

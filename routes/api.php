@@ -1,12 +1,14 @@
 <?php
 
+use App\Http\Controllers\Api\V1\AdminController;
 use App\Http\Controllers\Api\V1\AuthController;
+use App\Http\Controllers\Api\V1\ChainInfoController;
 use App\Http\Controllers\Api\V1\HealthController;
 use App\Http\Controllers\Api\V1\PortfolioController;
 use App\Http\Controllers\Api\V1\ProfileController;
+use App\Http\Controllers\Api\V1\TransactionController;
 use App\Http\Controllers\Api\V1\WalletController;
 use Illuminate\Support\Facades\Route;
-use App\Http\Controllers\Api\V1\ChainInfoController;
 
 Route::prefix('v1')->group(function (): void {
     Route::get('health', [HealthController::class, 'show']);
@@ -49,8 +51,27 @@ Route::prefix('v1')->group(function (): void {
 
         Route::get('chain/{chain}/address/{address}/info', [ChainInfoController::class, 'info']);
 
+        // Transaction routes
+        Route::prefix('transactions')->group(function (): void {
+            Route::post('prepare', [TransactionController::class, 'prepare']);
+            Route::post('record', [TransactionController::class, 'record']);
+            Route::get('/', [TransactionController::class, 'index']);
+            Route::post('/', [TransactionController::class, 'store']);
+            Route::get('{transaction}', [TransactionController::class, 'show']);
+            Route::post('{transaction}/status', [TransactionController::class, 'checkStatus']);
+            Route::post('{transaction}/cancel', [TransactionController::class, 'cancel']);
+            Route::post('sign', [TransactionController::class, 'sign']);
+            Route::post('broadcast', [TransactionController::class, 'broadcast']);
+        });
+
         Route::middleware('role:admin')->group(function (): void {
             Route::get('admin/health', [HealthController::class, 'admin']);
+            Route::get('admin/users', [AdminController::class, 'users']);
+            Route::get('admin/logs', [AdminController::class, 'logs']);
         });
     });
+
+    // Webhook endpoints (no auth required, signature validation)
+    Route::post('webhooks/alchemy', [TransactionController::class, 'alchemyWebhook']);
+    Route::post('webhooks/etherscan', [TransactionController::class, 'etherscanWebhook']);
 });

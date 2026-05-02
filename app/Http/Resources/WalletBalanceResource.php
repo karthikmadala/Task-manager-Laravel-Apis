@@ -10,6 +10,7 @@ class WalletBalanceResource extends JsonResource
     public function toArray(Request $request): array
     {
         return [
+            'chain_type'     => $this->chain_type?->value,
             'symbol'         => $this->token->symbol,
             'name'           => $this->token->name,
             'contract'       => $this->token->contract_address,

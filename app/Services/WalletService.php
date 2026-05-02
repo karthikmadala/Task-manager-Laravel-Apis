@@ -56,7 +56,7 @@ class WalletService
         $address = strtolower($address);
         $chain = ChainType::ETH; // MetaMask always signs EVM addresses
         $this->validateAddress($address, $chain);
-        $existingWallet = $this->walletRepository->findByAddressAndUser($address, $user->id, $chain->value);
+        $existingWallet = $this->walletRepository->findByAddressAndUser($address, $user->id);
 
         if ($existingWallet && $existingWallet->is_active) {
             throw ValidationException::withMessages([
@@ -89,7 +89,7 @@ class WalletService
     public function verifyAndLink(User $user, string $address, string $signature): Wallet
     {
         $address = strtolower($address);
-        $wallet = $this->walletRepository->findByAddressAndUser($address, $user->id, ChainType::ETH->value);
+        $wallet = $this->walletRepository->findByAddressAndUser($address, $user->id);
 
         if (! $wallet || ! $wallet->getRawOriginal('metamask_nonce')) {
             throw ValidationException::withMessages([
@@ -192,7 +192,11 @@ class WalletService
 
     private function ensureNotDuplicate(string $address, int $userId, ChainType $chain): void
     {
-        if ($this->walletRepository->findByAddressAndUser(strtolower($address), $userId, $chain->value)) {
+        $existing = $chain->isEvm()
+            ? $this->walletRepository->findByAddressAndUser(strtolower($address), $userId)
+            : $this->walletRepository->findByAddressAndUser(strtolower($address), $userId, $chain->value);
+
+        if ($existing) {
             throw ValidationException::withMessages([
                 'address' => ['This wallet address is already linked to your account.'],
             ]);
