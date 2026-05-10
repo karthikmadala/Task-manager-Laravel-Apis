@@ -13,12 +13,15 @@ return new class extends Migration
             $table->string('chain_type', 32)->nullable()->after('token_id');
         });
 
-        DB::statement('
-            UPDATE wallet_balances wb
-            INNER JOIN wallets w ON w.id = wb.wallet_id
-            SET wb.chain_type = w.chain_type
-            WHERE wb.chain_type IS NULL
-        ');
+        DB::table('wallets')
+            ->select(['id', 'chain_type'])
+            ->orderBy('id')
+            ->each(function (object $wallet): void {
+                DB::table('wallet_balances')
+                    ->where('wallet_id', $wallet->id)
+                    ->whereNull('chain_type')
+                    ->update(['chain_type' => $wallet->chain_type]);
+            });
 
         Schema::table('wallet_balances', function (Blueprint $table): void {
             $table->string('chain_type', 32)->nullable(false)->change();

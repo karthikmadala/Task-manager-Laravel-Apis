@@ -47,10 +47,11 @@ class WalletController extends Controller
             // Auto-sync on first load if no balance records exist yet
             $shouldRefresh = $refresh || $wallet->balances->isEmpty();
             $breakdown = $this->portfolioService->getWalletPortfolio($wallet, $shouldRefresh);
-            return [
-                'wallet'    => new WalletResource($wallet),
+            $resource = (new WalletResource($wallet))->toArray(request());
+
+            return array_merge($resource, [
                 'portfolio' => $breakdown,
-            ];
+            ]);
         });
 
         return api_response(true, 'Wallets retrieved.', [

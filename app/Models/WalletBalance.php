@@ -30,13 +30,30 @@ class WalletBalance extends Model
         ];
     }
 
+    protected static function booted(): void
+    {
+        static::creating(function (self $walletBalance): void {
+            if ($walletBalance->chain_type) {
+                return;
+            }
+
+            $wallet = $walletBalance->relationLoaded('wallet')
+                ? $walletBalance->wallet
+                : ($walletBalance->wallet_id ? Wallet::query()->find($walletBalance->wallet_id) : null);
+
+            if ($wallet) {
+                $walletBalance->chain_type = $wallet->chain_type;
+            }
+        });
+    }
+
     public function wallet(): BelongsTo
     {
-        return $this->belongsTo(Wallet::class);
+        return $this->belongsTo(Wallet::class)->withTrashed();
     }
 
     public function token(): BelongsTo
     {
-        return $this->belongsTo(Token::class);
+        return $this->belongsTo(Token::class)->withTrashed();
     }
 }

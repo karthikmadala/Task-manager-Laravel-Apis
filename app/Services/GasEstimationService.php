@@ -119,6 +119,36 @@ class GasEstimationService
         }
     }
 
+    public function buildMetaMaskTxParams(TransactionDto $dto, GasEstimate $gasEstimate): array
+    {
+        $params = [
+            'from' => $dto->fromAddress,
+            'gas'  => '0x' . dechex((int) $gasEstimate->gasLimit),
+        ];
+
+        if ($gasEstimate->maxFeePerGas && $gasEstimate->maxPriorityFeePerGas) {
+            $params['maxFeePerGas']         = $this->gweiToHex($gasEstimate->maxFeePerGas);
+            $params['maxPriorityFeePerGas'] = $this->gweiToHex($gasEstimate->maxPriorityFeePerGas);
+        }
+
+        if ($dto->tokenAddress) {
+            $params['to']    = $dto->tokenAddress;
+            $params['value'] = '0x0';
+            $params['data']  = $this->encodeErc20Transfer($dto->toAddress, $dto->amount, $dto->tokenAddress);
+        } else {
+            $params['to']    = $dto->toAddress;
+            $params['value'] = $this->decimalAmountToHex($dto->amount, 18);
+        }
+
+        return $params;
+    }
+
+    private function gweiToHex(string $gwei): string
+    {
+        $wei = bcmul($gwei, '1000000000', 0);
+        return '0x' . $this->decimalToHex($wei);
+    }
+
     public function validateGasParameters(array $params): bool
     {
         $gasLimit = $params['gas_limit'] ?? null;

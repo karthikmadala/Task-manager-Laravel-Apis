@@ -7,10 +7,12 @@ use App\Enums\TransactionStatus;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\SoftDeletes;
 
 class Transaction extends Model
 {
     use HasUuids;
+    use SoftDeletes;
 
     protected $fillable = [
         'wallet_id',
@@ -56,21 +58,22 @@ class Transaction extends Model
             'fee_usd'                  => 'decimal:8',
             'submitted_at'             => 'datetime',
             'confirmed_at'             => 'datetime',
+            'deleted_at'               => 'datetime',
         ];
     }
 
     public function wallet(): BelongsTo
     {
-        return $this->belongsTo(Wallet::class);
+        return $this->belongsTo(Wallet::class)->withTrashed();
     }
 
     public function user(): BelongsTo
     {
-        return $this->belongsTo(User::class);
+        return $this->belongsTo(User::class)->withTrashed();
     }
 
     public function token(): BelongsTo
     {
-        return $this->belongsTo(Token::class);
+        return $this->belongsTo(Token::class)->withTrashed();
     }
 }

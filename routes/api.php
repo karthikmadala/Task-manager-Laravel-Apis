@@ -12,6 +12,7 @@ use Illuminate\Support\Facades\Route;
 
 Route::prefix('v1')->group(function (): void {
     Route::get('health', [HealthController::class, 'show']);
+    Route::get('chains', [ChainInfoController::class, 'index']);
 
     Route::prefix('auth')->group(function (): void {
         Route::middleware('throttle:auth')->group(function (): void {
@@ -54,20 +55,32 @@ Route::prefix('v1')->group(function (): void {
         // Transaction routes
         Route::prefix('transactions')->group(function (): void {
             Route::post('prepare', [TransactionController::class, 'prepare']);
-            Route::post('record', [TransactionController::class, 'record']);
             Route::get('/', [TransactionController::class, 'index']);
-            Route::post('/', [TransactionController::class, 'store']);
             Route::get('{transaction}', [TransactionController::class, 'show']);
             Route::post('{transaction}/status', [TransactionController::class, 'checkStatus']);
-            Route::post('{transaction}/cancel', [TransactionController::class, 'cancel']);
-            Route::post('sign', [TransactionController::class, 'sign']);
-            Route::post('broadcast', [TransactionController::class, 'broadcast']);
+
+            Route::middleware('throttle:broadcast')->group(function (): void {
+                Route::post('record', [TransactionController::class, 'record']);
+                Route::post('/', [TransactionController::class, 'store']);
+                Route::post('{transaction}/cancel', [TransactionController::class, 'cancel']);
+                Route::post('sign', [TransactionController::class, 'sign']);
+                Route::post('broadcast', [TransactionController::class, 'broadcast']);
+            });
         });
 
         Route::middleware('role:admin')->group(function (): void {
             Route::get('admin/health', [HealthController::class, 'admin']);
             Route::get('admin/users', [AdminController::class, 'users']);
+            Route::get('admin/users/{user}', [AdminController::class, 'userDetails']);
             Route::get('admin/logs', [AdminController::class, 'logs']);
+            Route::get('admin/wallets', [AdminController::class, 'wallets']);
+            Route::get('admin/tokens', [AdminController::class, 'tokens']);
+            Route::post('admin/tokens', [AdminController::class, 'createToken']);
+            Route::put('admin/tokens/{token}', [AdminController::class, 'updateToken']);
+            Route::delete('admin/tokens/{token}', [AdminController::class, 'deleteToken']);
+            Route::patch('admin/tokens/{token}/status', [AdminController::class, 'toggleTokenStatus']);
+            // Admin‑only chain metadata endpoint
+            Route::get('chains', [ChainInfoController::class, 'index']);
         });
     });
 

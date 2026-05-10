@@ -78,7 +78,7 @@ class TransactionMonitorService
                 $updateData['confirmed_at'] = now();
 
                 // Get additional receipt data
-                $chain = ChainType::from($transaction->chain_type);
+                $chain = $transaction->chain_type;
                 $receiptData = $this->getTransactionReceipt($transaction->tx_hash, $chain);
 
                 if ($receiptData) {
@@ -120,7 +120,7 @@ class TransactionMonitorService
         }
 
         try {
-            $chain = ChainType::from($transaction->chain_type);
+            $chain = $transaction->chain_type;
             $receiptData = $this->getTransactionReceipt($transaction->tx_hash, $chain);
 
             if ($receiptData) {

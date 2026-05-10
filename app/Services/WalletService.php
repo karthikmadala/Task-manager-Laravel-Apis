@@ -33,15 +33,34 @@ class WalletService
     public function importExternal(User $user, array $data): Wallet
     {
         $chain = ChainType::from($data['chain_type']);
+        $address = strtolower($data['address']);
 
-        $this->validateAddress($data['address'], $chain);
-        $this->ensureNotDuplicate($data['address'], $user->id, $chain);
+        $this->validateAddress($address, $chain);
+
+        $existing = $this->findExistingWallet($address, $user->id, $chain);
+
+        if ($existing && ! $existing->trashed()) {
+            throw ValidationException::withMessages([
+                'address' => ['This wallet address is already linked to your account.'],
+            ]);
+        }
+
+        if ($existing) {
+            return $this->walletRepository->restore($existing, [
+                'chain_type'  => $chain->value,
+                'wallet_type' => WalletType::EXTERNAL->value,
+                'address'     => $address,
+                'label'       => $data['label'] ?? null,
+                'metamask_nonce' => null,
+                'is_active'   => true,
+            ]);
+        }
 
         return $this->walletRepository->create([
             'user_id'     => $user->id,
             'chain_type'  => $chain->value,
             'wallet_type' => WalletType::EXTERNAL->value,
-            'address'     => strtolower($data['address']),
+            'address'     => $address,
             'label'       => $data['label'] ?? null,
             'is_active'   => true,
         ]);
@@ -56,9 +75,9 @@ class WalletService
         $address = strtolower($address);
         $chain = ChainType::ETH; // MetaMask always signs EVM addresses
         $this->validateAddress($address, $chain);
-        $existingWallet = $this->walletRepository->findByAddressAndUser($address, $user->id);
+        $existingWallet = $this->walletRepository->findByAddressAndUserIncludingTrashed($address, $user->id);
 
-        if ($existingWallet && $existingWallet->is_active) {
+        if ($existingWallet && ! $existingWallet->trashed() && $existingWallet->is_active) {
             throw ValidationException::withMessages([
                 'address' => ['This wallet address is already linked to your account.'],
             ]);
@@ -66,17 +85,20 @@ class WalletService
 
         $nonce = $this->signatureService->generateNonce();
 
-        $wallet = $existingWallet;
-
-        if (! $wallet) {
-            $wallet = $this->walletRepository->create([
+        $wallet = $existingWallet
+            ? $this->walletRepository->restore($existingWallet, [
+                'chain_type'  => ChainType::ETH->value,
+                'wallet_type' => WalletType::METAMASK->value,
+                'address'     => $address,
+                'is_active'   => false,
+            ])
+            : $this->walletRepository->create([
                 'user_id'     => $user->id,
                 'chain_type'  => ChainType::ETH->value,
                 'wallet_type' => WalletType::METAMASK->value,
                 'address'     => $address,
                 'is_active'   => false, // activated after signature verified
             ]);
-        }
 
         $this->walletRepository->updateNonce($wallet, $nonce);
 
@@ -190,16 +212,10 @@ class WalletService
         }
     }
 
-    private function ensureNotDuplicate(string $address, int $userId, ChainType $chain): void
+    private function findExistingWallet(string $address, int $userId, ChainType $chain): ?Wallet
     {
-        $existing = $chain->isEvm()
-            ? $this->walletRepository->findByAddressAndUser(strtolower($address), $userId)
-            : $this->walletRepository->findByAddressAndUser(strtolower($address), $userId, $chain->value);
-
-        if ($existing) {
-            throw ValidationException::withMessages([
-                'address' => ['This wallet address is already linked to your account.'],
-            ]);
-        }
+        return $chain->isEvm()
+            ? $this->walletRepository->findByAddressAndUserIncludingTrashed(strtolower($address), $userId)
+            : $this->walletRepository->findByAddressAndUserIncludingTrashed(strtolower($address), $userId, $chain->value);
     }
 }

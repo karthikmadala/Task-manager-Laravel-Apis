@@ -6,10 +6,12 @@ use App\Enums\ChainType;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\SoftDeletes;
 
 class Token extends Model
 {
     use HasUuids;
+    use SoftDeletes;
 
     protected $fillable = [
         'symbol',
@@ -18,8 +20,10 @@ class Token extends Model
         'coingecko_id',
         'contract_address',
         'decimals',
+        'chain_id',
         'current_price_usd',
         'price_updated_at',
+        'enabled',
     ];
 
     protected function casts(): array
@@ -27,8 +31,11 @@ class Token extends Model
         return [
             'chain_type'        => ChainType::class,
             'decimals'          => 'integer',
+            'chain_id'          => 'integer',
             'current_price_usd' => 'float',
             'price_updated_at'  => 'datetime',
+            'enabled'           => 'boolean',
+            'deleted_at'        => 'datetime',
         ];
     }
 

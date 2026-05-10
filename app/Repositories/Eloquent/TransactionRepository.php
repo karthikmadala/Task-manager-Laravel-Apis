@@ -32,8 +32,10 @@ class TransactionRepository implements TransactionRepositoryInterface
     public function getPendingForWallet(Wallet $wallet): Collection
     {
         return Transaction::where('wallet_id', $wallet->id)
-            ->where('status', 'pending')
-            ->orWhere('status', 'submitted')
+            ->where(function ($query) {
+                $query->where('status', 'pending')
+                    ->orWhere('status', 'submitted');
+            })
             ->get();
     }
 

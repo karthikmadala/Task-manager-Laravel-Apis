@@ -15,9 +15,13 @@ interface WalletRepositoryInterface
 
     public function findByAddressAndUser(string $address, int $userId, ?string $chainType = null): ?Wallet;
 
+    public function findByAddressAndUserIncludingTrashed(string $address, int $userId, ?string $chainType = null): ?Wallet;
+
     public function findActiveMetaMaskWalletByAddress(string $address): ?Wallet;
 
     public function create(array $data): Wallet;
+
+    public function restore(Wallet $wallet, array $attributes = []): Wallet;
 
     public function updateNonce(Wallet $wallet, string $nonce): void;
 

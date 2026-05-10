@@ -116,7 +116,7 @@ class PortfolioService
         }
 
         return Cache::remember($cacheKey, self::CACHE_TTL, function () use ($address, $chain): array {
-            $tokens = Token::where('chain_type', $chain->value)->get();
+$tokens = Token::where('chain_type', $chain->value)->where('enabled', true)->get();
 
             if ($tokens->isEmpty()) {
                 return [];
@@ -188,7 +188,7 @@ class PortfolioService
         $totalUsd   = '0';
         $lastSynced = null;
         $balances = $wallet->balances
-            ->filter(fn(WalletBalance $wb) => bccomp((string) $wb->balance, '0', 18) > 0)
+            ->filter(fn(WalletBalance $wb) => bccomp((string) $wb->balance, '0', 18) > 0 && $wb->token->enabled)
             ->sortByDesc(fn(WalletBalance $wb) => (float) ($wb->balance_usd ?? '0'))
             ->map(function (WalletBalance $wb) use (&$totalUsd, &$lastSynced): array {
                 $price = $this->resolveWalletBalancePriceUsd($wb);
@@ -504,7 +504,7 @@ class PortfolioService
 
     private function syncWalletChain(Wallet $wallet, ChainType $chain): void
     {
-        $tokens = Token::where('chain_type', $chain->value)->get();
+        $tokens = Token::where('chain_type', $chain->value)->where('enabled', true)->get();
 
         if ($tokens->isEmpty()) {
             return;

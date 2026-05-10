@@ -1,4 +1,27 @@
 services:
+  frontend:
+    build:
+      context: ../crypto application
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      PORT: 4000
+      CRYPTO_APP_API_BASE_URL: http://apache/api/v1
+      CRYPTO_APP_PUBLIC_API_BASE_URL: /api/v1
+      CRYPTO_APP_PROXY_TARGET: http://apache
+      NG_ALLOWED_HOSTS: 127.0.0.1,localhost
+
+    ports:
+      - "4200:4000"
+    depends_on:
+      apache:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:4000 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
   app:
     build:
       context: .
@@ -8,20 +31,22 @@ services:
     env_file:
       - .env
     environment:
-      APP_ENV: production
-      APP_DEBUG: "false"
+      APP_ENV: local
+      APP_DEBUG: "true"
       APP_URL: http://localhost:8080
       DB_CONNECTION: mysql
       DB_HOST: mysql
       DB_PORT: 3306
-      DB_DATABASE: ${DB_DATABASE:-crypto_portfolio}
-      DB_USERNAME: ${DB_USERNAME:-crypto_user}
-      DB_PASSWORD: ${DB_PASSWORD:-crypto_password}
+      DB_DATABASE: crypto_portfolio
+      DB_USERNAME: "db_user"
+      DB_PASSWORD: "db_password"
       CACHE_STORE: redis
       QUEUE_CONNECTION: redis
       SESSION_DRIVER: redis
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      CORS_ALLOWED_ORIGINS: http://localhost:4200,http://127.0.0.1:4200,http://localhost:4000,http://127.0.0.1:4000,http://localhost:8080,http://127.0.0.1:8080
+      SANCTUM_STATEFUL_DOMAINS: localhost,localhost:4200,localhost:4000,localhost:8080,127.0.0.1,127.0.0.1:4200,127.0.0.1:4000,127.0.0.1:8080
     volumes:
       - storage_data:/var/www/html/storage
       - bootstrap_cache:/var/www/html/bootstrap/cache
@@ -42,19 +67,22 @@ services:
     env_file:
       - .env
     environment:
-      APP_ENV: production
-      APP_DEBUG: "false"
+      APP_ENV: local
+      APP_DEBUG: "true"
+      APP_URL: http://localhost:8080
       DB_CONNECTION: mysql
       DB_HOST: mysql
       DB_PORT: 3306
-      DB_DATABASE: ${DB_DATABASE:-crypto_portfolio}
-      DB_USERNAME: ${DB_USERNAME:-crypto_user}
-      DB_PASSWORD: ${DB_PASSWORD:-crypto_password}
+      DB_DATABASE: crypto_portfolio
+      DB_USERNAME: "db_user"
+      DB_PASSWORD: "db_password"
       CACHE_STORE: redis
       QUEUE_CONNECTION: redis
       SESSION_DRIVER: redis
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      CORS_ALLOWED_ORIGINS: http://localhost:4200,http://127.0.0.1:4200,http://localhost:4000,http://127.0.0.1:4000,http://localhost:8080,http://127.0.0.1:8080
+      SANCTUM_STATEFUL_DOMAINS: localhost,localhost:4200,localhost:4000,localhost:8080,127.0.0.1,127.0.0.1:4200,127.0.0.1:4000,127.0.0.1:8080
     command: php artisan queue:work redis --sleep=3 --tries=3 --max-time=3600
     volumes:
       - storage_data:/var/www/html/storage
@@ -81,18 +109,19 @@ services:
       - storage_data:/var/www/html/storage
 
   mysql:
-    image: mysql:8.4
+    image: mysql:8.0
     restart: unless-stopped
     command: --default-authentication-plugin=mysql_native_password --innodb-buffer-pool-size=256M
     environment:
-      MYSQL_DATABASE: ${DB_DATABASE:-crypto_portfolio}
-      MYSQL_USER: ${DB_USERNAME:-crypto_user}
-      MYSQL_PASSWORD: ${DB_PASSWORD:-crypto_password}
-      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-root_password}
+      MYSQL_DATABASE: crypto_portfolio
+      # If DB_USERNAME is root, we don't set MYSQL_USER because root already exists
+      MYSQL_USER: "db_user"
+      MYSQL_PASSWORD: "db_password"
+      MYSQL_ROOT_PASSWORD: "root_password"
     volumes:
       - mysql_data:/var/lib/mysql
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p$$MYSQL_ROOT_PASSWORD"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
       interval: 15s
       timeout: 5s
       retries: 10
@@ -103,6 +132,8 @@ services:
     command: redis-server --appendonly yes --save 60 1000
     volumes:
       - redis_data:/data
+    ports:
+      - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 15s

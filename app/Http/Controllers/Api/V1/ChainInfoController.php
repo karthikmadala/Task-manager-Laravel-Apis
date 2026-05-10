@@ -44,4 +44,24 @@ class ChainInfoController extends Controller
             'tokens'  => $data,
         ]);
     }
+
+    /**
+     * GET /api/v1/chains
+     * Returns list of supported chains and their chain IDs.
+     */
+    public function index(): JsonResponse
+    {
+        // Retrieve chain IDs from native tokens in the tokens table
+        $chains = Token::whereNull('contract_address')
+            ->where('enabled', true)
+            ->get()
+            ->groupBy('chain_type')
+            ->map(function ($tokens) {
+                /** @var \App\Models\Token $token */
+                $token = $tokens->first();
+                return ['chain_id' => $token->chain_id];
+            })
+            ->toArray();
+        return api_response(true, 'Supported chains retrieved.', $chains);
+    }
 }

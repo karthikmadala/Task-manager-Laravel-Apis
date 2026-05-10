@@ -8,6 +8,6 @@ if (! function_exists('api_response')) {
             'message' => $message,
             'data' => $data,
             'errors' => $errors,
-        ], $status);
+        ], $status, [], JSON_PRESERVE_ZERO_FRACTION);
     }
 }

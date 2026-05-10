@@ -37,10 +37,12 @@ class TransactionService
         $this->validateSufficientBalance($wallet, $dto);
 
         $gasEstimate = $this->gasEstimationService->estimateGas($dto);
+        $txParams    = $this->gasEstimationService->buildMetaMaskTxParams($dto, $gasEstimate);
 
         return [
             'transaction' => $dto->toArray(),
             'gas_estimate' => $gasEstimate->toArray(),
+            'tx_params'   => $txParams,
             'wallet' => [
                 'address' => $wallet->address,
                 'chain_type' => $wallet->chain_type->value,

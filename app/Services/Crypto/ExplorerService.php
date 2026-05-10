@@ -7,6 +7,7 @@ use GuzzleHttp\Client;
 use GuzzleHttp\Exception\GuzzleException;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
+use App\Models\Token;
 
 class ExplorerService
 {
@@ -267,8 +268,13 @@ class ExplorerService
             throw new \InvalidArgumentException('BTC explorer is handled by BlockCypher.');
         }
 
-        $chainId = config("crypto.chains.{$chain->value}.chain_id");
         $v2Key = config('crypto.explorer.v2.key');
+
+        // Get chain_id from the native token entry in the tokens table
+        $nativeToken = Token::where('chain_type', $chain->value)
+            ->whereNull('contract_address')
+            ->first();
+        $chainId = $nativeToken?->chain_id;
 
         if ($v2Key && $chainId) {
             return [
