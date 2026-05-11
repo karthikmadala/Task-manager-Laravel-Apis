@@ -183,6 +183,103 @@ class ExplorerService
         return '__native__:' . $chain->value;
     }
 
+    /**
+     * Returns the current block number as a decimal string, or null on failure.
+     */
+    public function getCurrentBlockNumber(ChainType $chain): ?string
+    {
+        $result = $this->callProxy($chain, 'eth_blockNumber', []);
+
+        return is_string($result) ? $this->hexToDecimal($result) : null;
+    }
+
+    /**
+     * Returns 'ok' (success=1) or 'fail' (success=0) for a mined tx, or null if not yet mined.
+     */
+    public function getTxReceiptStatus(string $txHash, ChainType $chain): ?string
+    {
+        $result = $this->callStandard($chain, [
+            'module' => 'transaction',
+            'action' => 'gettxreceiptstatus',
+            'txhash' => $txHash,
+        ]);
+
+        if (! is_array($result)) {
+            return null;
+        }
+
+        $status = $result['status'] ?? null;
+
+        if ($status === null || $status === '') {
+            return null; // not yet mined
+        }
+
+        return $status === '1' ? 'ok' : 'fail';
+    }
+
+    /**
+     * Fetches normal (native) transactions for an address starting from a given block.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function getTransactionList(
+        string $address,
+        ChainType $chain,
+        int $startBlock = 0,
+        int $endBlock = 99999999,
+        int $page = 1,
+        int $offset = 100,
+        string $sort = 'asc'
+    ): array {
+        $result = $this->callStandard($chain, [
+            'module'     => 'account',
+            'action'     => 'txlist',
+            'address'    => $address,
+            'startblock' => (string) $startBlock,
+            'endblock'   => (string) $endBlock,
+            'page'       => (string) $page,
+            'offset'     => (string) $offset,
+            'sort'       => $sort,
+        ], allowEmptyResult: true);
+
+        return is_array($result) ? array_values($result) : [];
+    }
+
+    /**
+     * Fetches ERC-20 token transfer events for an address starting from a given block.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function getTokenTransferList(
+        string $address,
+        ChainType $chain,
+        int $startBlock = 0,
+        int $endBlock = 99999999,
+        int $page = 1,
+        int $offset = 100,
+        string $sort = 'asc',
+        ?string $contractAddress = null
+    ): array {
+        $params = [
+            'module'     => 'account',
+            'action'     => 'tokentx',
+            'address'    => $address,
+            'startblock' => (string) $startBlock,
+            'endblock'   => (string) $endBlock,
+            'page'       => (string) $page,
+            'offset'     => (string) $offset,
+            'sort'       => $sort,
+        ];
+
+        if ($contractAddress !== null) {
+            $params['contractaddress'] = $contractAddress;
+        }
+
+        $result = $this->callStandard($chain, $params, allowEmptyResult: true);
+
+        return is_array($result) ? array_values($result) : [];
+    }
+
     private function callStandard(ChainType $chain, array $params, bool $allowEmptyResult = false): mixed
     {
         try {
@@ -215,6 +312,15 @@ class ExplorerService
 
             return null;
         }
+    }
+
+    /**
+     * Public access to the proxy module for callers that need raw JSON-RPC results
+     * without owning a full RPC node (e.g. eth_getTransactionByHash).
+     */
+    public function callProxyPublic(ChainType $chain, string $action, array $params): mixed
+    {
+        return $this->callProxy($chain, $action, $params);
     }
 
     private function callProxy(ChainType $chain, string $action, array $params): mixed

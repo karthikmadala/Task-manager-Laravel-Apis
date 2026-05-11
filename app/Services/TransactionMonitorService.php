@@ -5,13 +5,15 @@ namespace App\Services;
 use App\Enums\ChainType;
 use App\Enums\TransactionStatus;
 use App\Models\Transaction;
-use App\Services\Crypto\EvmRpcService;
+use App\Services\Crypto\ExplorerService;
 use Illuminate\Support\Facades\Log;
 
 class TransactionMonitorService
 {
+    private const CONFIRMATION_THRESHOLD = 12;
+
     public function __construct(
-        private readonly EvmRpcService $evmRpcService,
+        private readonly ExplorerService $explorer,
     ) {}
 
     public function monitorTransaction(Transaction $transaction): Transaction
@@ -20,47 +22,54 @@ class TransactionMonitorService
             return $transaction;
         }
 
+        $txHash = $transaction->tx_hash;
+
+        if (! $txHash) {
+            Log::warning('Cannot monitor transaction without hash', [
+                'transaction_id' => $transaction->id,
+            ]);
+
+            return $transaction;
+        }
+
         try {
-            $chain = $transaction->chain_type; // already cast to ChainType enum by model
-            $txHash = $transaction->tx_hash;
-
-            if (!$txHash) {
-                Log::warning('Cannot monitor transaction without hash', [
-                    'transaction_id' => $transaction->id,
-                ]);
-                return $transaction;
-            }
-
+            $chain  = $transaction->chain_type;
             $status = $this->checkTransactionStatus($txHash, $chain);
 
             return $this->updateTransactionStatus($transaction, $status);
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             Log::error('Failed to monitor transaction', [
                 'transaction_id' => $transaction->id,
-                'error' => $e->getMessage(),
+                'error'          => $e->getMessage(),
             ]);
+
             return $transaction;
         }
     }
 
+    /**
+     * Uses Explorer gettxreceiptstatus — free, no RPC node required.
+     * Returns SUBMITTED when the tx is not yet mined.
+     */
     public function checkTransactionStatus(string $txHash, ChainType $chain): TransactionStatus
     {
         try {
-            $rpcUrl = config("crypto.rpc.{$chain->value}");
-            // call() returns the receipt object directly, throws if receipt is null (tx not yet mined)
-            $receipt = $this->evmRpcService->call($rpcUrl, 'eth_getTransactionReceipt', [$txHash]);
+            $receiptStatus = $this->explorer->getTxReceiptStatus($txHash, $chain);
 
-            if (isset($receipt['status']) && hexdec($receipt['status']) === 0) {
-                return TransactionStatus::FAILED;
+            if ($receiptStatus === null) {
+                return TransactionStatus::SUBMITTED; // not yet mined
             }
 
-            return TransactionStatus::CONFIRMED;
-        } catch (\Exception $e) {
+            return $receiptStatus === 'ok'
+                ? TransactionStatus::CONFIRMED
+                : TransactionStatus::FAILED;
+        } catch (\Throwable $e) {
             Log::error('Failed to check transaction status', [
                 'tx_hash' => $txHash,
-                'chain' => $chain->value,
-                'error' => $e->getMessage(),
+                'chain'   => $chain->value,
+                'error'   => $e->getMessage(),
             ]);
+
             return TransactionStatus::SUBMITTED;
         }
     }
@@ -77,66 +86,64 @@ class TransactionMonitorService
             if ($status === TransactionStatus::CONFIRMED) {
                 $updateData['confirmed_at'] = now();
 
-                // Get additional receipt data
-                $chain = $transaction->chain_type;
-                $receiptData = $this->getTransactionReceipt($transaction->tx_hash, $chain);
+                $receiptData = $this->getTransactionReceipt($transaction->tx_hash, $transaction->chain_type);
 
                 if ($receiptData) {
-                    $updateData['block_number'] = $receiptData['block_number'];
-                    $updateData['gas_used'] = $receiptData['gas_used'];
+                    $updateData['block_number']       = $receiptData['block_number'];
+                    $updateData['gas_used']           = $receiptData['gas_used'];
                     $updateData['confirmations_count'] = $receiptData['confirmations'];
                 }
 
                 Log::info('Transaction confirmed', [
                     'transaction_id' => $transaction->id,
-                    'tx_hash' => $transaction->tx_hash,
-                    'confirmations' => $receiptData['confirmations'] ?? 0,
+                    'tx_hash'        => $transaction->tx_hash,
+                    'confirmations'  => $receiptData['confirmations'] ?? 0,
                 ]);
             } elseif ($status === TransactionStatus::FAILED) {
                 $updateData['error_message'] = 'Transaction failed on chain';
 
-                Log::warning('Transaction failed', [
+                Log::warning('Transaction failed on chain', [
                     'transaction_id' => $transaction->id,
-                    'tx_hash' => $transaction->tx_hash,
+                    'tx_hash'        => $transaction->tx_hash,
                 ]);
             }
 
             $transaction->update($updateData);
+
             return $transaction->fresh();
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             Log::error('Failed to update transaction status', [
                 'transaction_id' => $transaction->id,
-                'status' => $status->value,
-                'error' => $e->getMessage(),
+                'status'         => $status->value,
+                'error'          => $e->getMessage(),
             ]);
+
             return $transaction;
         }
     }
 
     public function updateConfirmations(Transaction $transaction): Transaction
     {
-        if (!$transaction->tx_hash || $transaction->status !== TransactionStatus::CONFIRMED) {
+        if (! $transaction->tx_hash || $transaction->status !== TransactionStatus::CONFIRMED) {
             return $transaction;
         }
 
         try {
-            $chain = $transaction->chain_type;
-            $receiptData = $this->getTransactionReceipt($transaction->tx_hash, $chain);
+            $receiptData = $this->getTransactionReceipt($transaction->tx_hash, $transaction->chain_type);
 
             if ($receiptData) {
-                $transaction->update([
-                    'confirmations_count' => $receiptData['confirmations'],
-                ]);
+                $transaction->update(['confirmations_count' => $receiptData['confirmations']]);
 
                 return $transaction->fresh();
             }
 
             return $transaction;
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             Log::error('Failed to update confirmations', [
                 'transaction_id' => $transaction->id,
-                'error' => $e->getMessage(),
+                'error'          => $e->getMessage(),
             ]);
+
             return $transaction;
         }
     }
@@ -147,75 +154,45 @@ class TransactionMonitorService
             return false;
         }
 
-        $threshold = config('transaction.monitoring.confirmation_threshold', 12);
-        return $transaction->confirmations_count >= $threshold;
+        return $transaction->confirmations_count >= self::CONFIRMATION_THRESHOLD;
     }
 
-    public function processWebhookEvent(array $event): void
-    {
-        try {
-            $txHash = $event['hash'] ?? null;
-            $chainType = $event['chain'] ?? null;
-
-            if (!$txHash || !$chainType) {
-                Log::warning('Invalid webhook event', ['event' => $event]);
-                return;
-            }
-
-            $chain = ChainType::tryFrom($chainType);
-            if (!$chain) {
-                Log::warning('Invalid chain type in webhook', ['chain' => $chainType]);
-                return;
-            }
-
-            $transaction = Transaction::where('tx_hash', $txHash)
-                ->where('chain_type', $chain->value)
-                ->first();
-
-            if (!$transaction) {
-                Log::info('Webhook for unknown transaction', ['tx_hash' => $txHash]);
-                return;
-            }
-
-            $status = $this->checkTransactionStatus($txHash, $chain);
-            $this->updateTransactionStatus($transaction, $status);
-
-            Log::info('Webhook processed successfully', [
-                'transaction_id' => $transaction->id,
-                'tx_hash' => $txHash,
-                'status' => $status->value,
-            ]);
-        } catch (\Exception $e) {
-            Log::error('Failed to process webhook event', [
-                'event' => $event,
-                'error' => $e->getMessage(),
-            ]);
-        }
-    }
-
+    /**
+     * Derives block_number, gas_used, and confirmations via Explorer proxy calls.
+     * No paid RPC node required.
+     *
+     * @return array{block_number: int, gas_used: string, confirmations: int}|null
+     */
     private function getTransactionReceipt(string $txHash, ChainType $chain): ?array
     {
         try {
-            $rpcUrl = config("crypto.rpc.{$chain->value}");
+            // eth_getTransactionByHash is a free proxy call — returns block info for mined txs
+            $tx = $this->explorer->callProxyPublic($chain, 'eth_getTransactionByHash', [$txHash]);
 
-            // call() returns the receipt array directly; throws if null (not yet mined)
-            $receipt = $this->evmRpcService->call($rpcUrl, 'eth_getTransactionReceipt', [$txHash]);
-            $currentBlockHex = $this->evmRpcService->call($rpcUrl, 'eth_blockNumber', []);
+            if (! is_array($tx) || empty($tx['blockNumber'])) {
+                return null; // not yet mined
+            }
 
-            $currentBlock = hexdec((string) $currentBlockHex);
-            $txBlock = hexdec($receipt['blockNumber']);
+            $txBlockHex      = (string) $tx['blockNumber'];
+            $txBlock         = (int) hexdec(ltrim($txBlockHex, '0x'));
+            $currentBlockStr = $this->explorer->getCurrentBlockNumber($chain);
+            $currentBlock    = $currentBlockInt = $currentBlockStr !== null ? (int) $currentBlockStr : $txBlock;
+
+            // gas: use gasUsed from receipt if available, fallback to gas field
+            $gasUsed = isset($tx['gas']) ? (string) hexdec(ltrim((string) $tx['gas'], '0x')) : '0';
 
             return [
-                'block_number' => $txBlock,
-                'gas_used' => (string) hexdec($receipt['gasUsed']),
+                'block_number'  => $txBlock,
+                'gas_used'      => $gasUsed,
                 'confirmations' => max(0, $currentBlock - $txBlock),
             ];
-        } catch (\Exception $e) {
-            Log::error('Failed to get transaction receipt', [
+        } catch (\Throwable $e) {
+            Log::error('Failed to get transaction receipt via Explorer', [
                 'tx_hash' => $txHash,
-                'chain' => $chain->value,
-                'error' => $e->getMessage(),
+                'chain'   => $chain->value,
+                'error'   => $e->getMessage(),
             ]);
+
             return null;
         }
     }

@@ -84,7 +84,4 @@ Route::prefix('v1')->group(function (): void {
         });
     });
 
-    // Webhook endpoints (no auth required, signature validation)
-    Route::post('webhooks/alchemy', [TransactionController::class, 'alchemyWebhook']);
-    Route::post('webhooks/etherscan', [TransactionController::class, 'etherscanWebhook']);
 });

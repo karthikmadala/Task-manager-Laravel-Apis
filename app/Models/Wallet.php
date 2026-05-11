@@ -25,6 +25,7 @@ class Wallet extends Model
         'label',
         'metamask_nonce',
         'is_active',
+        'last_synced_block',
     ];
 
     protected $hidden = ['metamask_nonce'];
