@@ -7,9 +7,8 @@ use App\Models\Token;
 use App\Models\User;
 use App\Models\Wallet;
 use App\Models\WalletBalance;
-use App\Services\Crypto\AlchemyService;
+use App\Services\Crypto\BlockchainNodeService;
 use App\Services\Crypto\BlockCypherService;
-use App\Services\Crypto\Contracts\EvmRpcServiceInterface;
 use App\Services\Crypto\ExplorerService;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
@@ -33,9 +32,8 @@ class PortfolioService
     private const CACHE_TTL = 60;
 
     public function __construct(
-        private readonly AlchemyService        $alchemy,
+        private readonly BlockchainNodeService $node,
         private readonly ExplorerService       $explorer,
-        private readonly EvmRpcServiceInterface $evmRpc,
         private readonly BlockCypherService    $blockCypher,
     ) {}
 
@@ -131,7 +129,7 @@ $tokens = Token::where('chain_type', $chain->value)->where('enabled', true)->get
 
             return $tokens->map(function (Token $token) use ($rawBalances, $priceMap, $chain): array {
                 $raw      = $rawBalances[$token->id] ?? '0';
-                $balance  = $this->evmRpc->toDecimalUnits($raw, $token->decimals);
+                $balance  = $this->toDecimalUnits($raw, $token->decimals);
                 $price    = $this->resolveTokenPriceUsd($token, $priceMap, $chain);
                 $valueUsd = $price !== null
                     ? $this->formatUsd(bcmul($balance, (string) $price, 8))
@@ -241,26 +239,25 @@ $tokens = Token::where('chain_type', $chain->value)->where('enabled', true)->get
     // ─── Balance fetchers ────────────────────────────────────────────────────
 
     /**
-     * Fetch EVM on-chain balances for a wallet/address, returning [ token_id => raw_wei_string ].
+     * Fetch EVM on-chain balances via node (Alchemy → Explorer → RPC fallback).
+     * Returns [ token_id => raw_wei_string ].
      */
     private function fetchEvmRawBalances(string $address, ChainType $chain, Collection $tokens): array
     {
-        $balances = [];
-
-        $nativeToken = $tokens->first(fn(Token $t) => $t->isNative());
-        if ($nativeToken) {
-            $balances[$nativeToken->id] = $this->fetchNativeBalance($address, $chain);
-        }
-
+        $nativeToken   = $tokens->first(fn(Token $t) => $t->isNative());
         $erc20Tokens   = $tokens->filter(fn(Token $t) => ! $t->isNative());
         $contractAddrs = $erc20Tokens->pluck('contract_address')->values()->all();
 
-        if (! empty($contractAddrs)) {
-            $fetched = $this->fetchErc20Balances($address, $contractAddrs, $chain);
+        $result = $this->node->fetchPortfolioBalances($chain, $address, $contractAddrs);
 
-            foreach ($erc20Tokens as $token) {
-                $balances[$token->id] = $fetched[strtolower((string) $token->contract_address)] ?? '0';
-            }
+        $balances = [];
+
+        if ($nativeToken) {
+            $balances[$nativeToken->id] = $result['native_balance'] ?? '0';
+        }
+
+        foreach ($erc20Tokens as $token) {
+            $balances[$token->id] = $result['token_balances'][strtolower((string) $token->contract_address)] ?? '0';
         }
 
         return $balances;
@@ -282,92 +279,15 @@ $tokens = Token::where('chain_type', $chain->value)->where('enabled', true)->get
         return [$btcToken->id => $data['final_balance']];
     }
 
-    /**
-     * Fetch native token balance using provider priority: Alchemy → Explorer → RPC.
-     * Returns '0' if all providers fail.
-     */
-    private function fetchNativeBalance(string $address, ChainType $chain): string
-    {
-        // 1. Alchemy — ETH + Polygon only
-        if ($this->alchemySupports($chain)) {
-            try {
-                return $this->alchemy->getNativeBalance($address, $chain);
-            } catch (\Throwable $e) {
-                Log::warning('Alchemy native balance failed, trying explorer', [
-                    'chain' => $chain->value, 'error' => $e->getMessage(),
-                ]);
-            }
-        }
-
-        // 2. Block Explorer API (Etherscan / BscScan / PolygonScan)
-        if (config("crypto.explorer.{$chain->value}.key")) {
-            try {
-                return $this->explorer->getNativeBalance($address, $chain);
-            } catch (\Throwable $e) {
-                Log::warning('Explorer native balance failed, falling back to RPC', [
-                    'chain' => $chain->value, 'error' => $e->getMessage(),
-                ]);
-            }
-        }
-
-        // 3. Direct JSON-RPC fallback (always available)
-        try {
-            return $this->evmRpc->getNativeBalance($address, $chain);
-        } catch (\Throwable $e) {
-            Log::error('All providers failed for native balance', [
-                'chain' => $chain->value, 'address' => $address, 'error' => $e->getMessage(),
-            ]);
-
-            return '0';
-        }
-    }
-
-    /**
-     * Fetch ERC-20 balances using provider priority: Alchemy batch → Explorer → RPC batch.
-     * Returns [ lowercase_contract => decimal_balance ].
-     */
-    private function fetchErc20Balances(string $address, array $contracts, ChainType $chain): array
-    {
-        // 1. Alchemy batch — ETH + Polygon only
-        if ($this->alchemySupports($chain)) {
-            try {
-                return $this->alchemy->getTokenBalances($address, $chain, $contracts);
-            } catch (\Throwable $e) {
-                Log::warning('Alchemy ERC-20 batch failed, trying explorer', [
-                    'chain' => $chain->value, 'error' => $e->getMessage(),
-                ]);
-            }
-        }
-
-        // 2. Explorer API
-        if (config("crypto.explorer.{$chain->value}.key")) {
-            try {
-                return $this->explorer->getTokenBalances($address, $contracts, $chain);
-            } catch (\Throwable $e) {
-                Log::warning('Explorer ERC-20 balances failed, falling back to RPC', [
-                    'chain' => $chain->value, 'error' => $e->getMessage(),
-                ]);
-            }
-        }
-
-        // 3. Direct JSON-RPC batch fallback
-        try {
-            return $this->evmRpc->getErc20Balances($address, $contracts, $chain);
-        } catch (\Throwable $e) {
-            Log::error('All providers failed for ERC-20 balances', [
-                'chain' => $chain->value, 'address' => $address, 'error' => $e->getMessage(),
-            ]);
-
-            return array_fill_keys(array_map('strtolower', $contracts), '0');
-        }
-    }
-
     // ─── Helpers ─────────────────────────────────────────────────────────────
 
-    private function alchemySupports(ChainType $chain): bool
+    private function toDecimalUnits(string $rawAmount, int $decimals): string
     {
-        return \in_array($chain, [ChainType::ETH, ChainType::POLYGON], true)
-            && (bool) config('crypto.alchemy.key');
+        if ($rawAmount === '0') {
+            return '0';
+        }
+
+        return bcdiv($rawAmount, bcpow('10', (string) $decimals), $decimals);
     }
 
     private function activeWallets(User $user): Collection
@@ -519,7 +439,7 @@ $tokens = Token::where('chain_type', $chain->value)->where('enabled', true)->get
 
         foreach ($tokens as $token) {
             $raw      = $rawBalances[$token->id] ?? '0';
-            $balance  = $this->evmRpc->toDecimalUnits($raw, $token->decimals);
+            $balance  = $this->toDecimalUnits($raw, $token->decimals);
             $price    = $chain === ChainType::BTC ? $token->current_price_usd : $this->resolveTokenPriceUsd($token, $priceMap, $chain);
             $valueUsd = $price !== null
                 ? bcmul($balance, (string) $price, 8)

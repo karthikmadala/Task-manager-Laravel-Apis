@@ -74,8 +74,7 @@ Bind in `AppServiceProvider::register()`. Policies registered via `Gate::policy(
 | Wallet | WalletController | WalletService | WalletRepository |
 | Portfolio | PortfolioController | PortfolioService | — |
 | Chain Info | ChainInfoController | PortfolioService | — |
-
-`Transaction` module (TransactionController / TransactionService / TransactionRepository) is **planned but not yet implemented**.
+| Transaction | TransactionController | TransactionService | TransactionRepository |
 
 ### Authorization
 
@@ -98,7 +97,7 @@ All queries must be scoped to `auth()->id()` — BOLA prevented at policy level.
 
 All HTTP calls use Guzzle with timeouts. Failures throw domain exceptions caught by `Handler.php`.
 
-> **Note:** `BlockchainNodeService` (Node.js microservice for tx broadcast) and queue jobs (`UpdateWalletBalancesJob`, `FetchTokenPricesJob`) are **planned but not yet implemented**.
+> **Note:** `BlockchainNodeService` (Node.js microservice for backend-signed tx broadcast) is not implemented — backend signing returns 501. Queue jobs (`UpdateWalletBalancesJob`, `FetchTokenPricesJob`, `MonitorPendingTransactionsJob`, `SyncIncomingTransactionsJob`) are all implemented and scheduled via `routes/console.php`.
 
 ### Portfolio Caching
 

@@ -1,5 +1,7 @@
 <?php
 
+use App\Http\Middleware\CheckPermission;
+use App\Http\Middleware\CheckRole;
 use App\Http\Middleware\CheckTokenExpiration;
 use App\Http\Middleware\LogApiRequest;
 use App\Http\Middleware\RoleMiddleware;
@@ -24,6 +26,8 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->alias([
             'check.token.expiry' => CheckTokenExpiration::class,
             'role'               => RoleMiddleware::class,
+            'permission'        => CheckPermission::class,
+            'checkRole'          => CheckRole::class,
             'store.api.session'  => StoreApiSessionMetadata::class,
         ]);
 

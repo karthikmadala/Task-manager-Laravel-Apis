@@ -47,21 +47,29 @@ class ChainInfoController extends Controller
 
     /**
      * GET /api/v1/chains
-     * Returns list of supported chains and their chain IDs.
+     * Returns full metadata for all supported chains.
      */
     public function index(): JsonResponse
     {
-        // Retrieve chain IDs from native tokens in the tokens table
-        $chains = Token::whereNull('contract_address')
+        $nativeTokens = Token::whereNull('contract_address')
             ->where('enabled', true)
             ->get()
-            ->groupBy('chain_type')
-            ->map(function ($tokens) {
-                /** @var \App\Models\Token $token */
-                $token = $tokens->first();
-                return ['chain_id' => $token->chain_id];
-            })
-            ->toArray();
-        return api_response(true, 'Supported chains retrieved.', $chains);
+            ->keyBy('chain_type');
+
+        $chains = collect(ChainType::cases())->mapWithKeys(function (ChainType $chain) use ($nativeTokens) {
+            $token = $nativeTokens->get($chain->value);
+
+            return [$chain->value => [
+                'name'      => $chain->label(),
+                'symbol'    => $chain->nativeSymbol(),
+                'chain_id'  => $token?->chain_id,
+                'decimals'  => $chain === ChainType::BTC ? 8 : 18,
+                'read_only' => $chain->isReadOnly(),
+                'is_evm'    => $chain->isEvm(),
+                'enabled'   => $chain === ChainType::BTC ? true : ($token !== null && $token->chain_id !== null),
+            ]];
+        });
+
+        return api_response(true, 'Supported chains retrieved.', ['chains' => $chains]);
     }
 }

@@ -16,6 +16,8 @@ class WalletResource extends JsonResource
             'wallet_type' => $this->wallet_type->value,
             'address'     => $this->address,
             'label'       => $this->label,
+            'wallet_origin' => $this->wallet_origin ?? 'external',
+            'has_private_key' => $this->hasPrivateKey(),
             'is_active'   => $this->is_active,
             'created_at'  => $this->created_at?->toISOString(),
         ];

@@ -24,11 +24,14 @@ class Wallet extends Model
         'address',
         'label',
         'metamask_nonce',
+        'encrypted_private_key',
+        'private_key_salt',
+        'wallet_origin',
         'is_active',
         'last_synced_block',
     ];
 
-    protected $hidden = ['metamask_nonce'];
+    protected $hidden = ['metamask_nonce', 'encrypted_private_key', 'private_key_salt'];
 
     protected function casts(): array
     {
@@ -77,5 +80,89 @@ class Wallet extends Model
     public function scopeActive($query)
     {
         return $query->where('is_active', true);
+    }
+
+    public function scopeInternal($query)
+    {
+        return $query->where('wallet_origin', 'internal');
+    }
+
+    public function hasPrivateKey(): bool
+    {
+        return ! empty($this->encrypted_private_key);
+    }
+
+    public function decryptPrivateKey(string $password): ?string
+    {
+        if (! $this->hasPrivateKey()) {
+            return null;
+        }
+
+        $key = $this->getMasterKey($password);
+        if (! $key) {
+            return null;
+        }
+
+        try {
+            $decrypted = sodium_crypto_secretbox_open(
+                base64_decode($this->encrypted_private_key),
+                base64_decode($this->private_key_salt),
+                $key,
+            );
+
+            return $decrypted !== false ? $decrypted : null;
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    public function setEncryptedPrivateKey(string $privateKey, string $userPassword): void
+    {
+        // Ensure user has an encryption_salt (16 bytes for sodium_crypto_pwhash)
+        if (! $this->user?->encryption_salt) {
+            $this->user->update([
+                'encryption_salt' => base64_encode(random_bytes(16)),
+            ]);
+            $this->user->refresh();
+        }
+
+        $salt = random_bytes(SODIUM_CRYPTO_SECRETBOX_NONCEBYTES);
+        $key  = $this->getMasterKey($userPassword);
+        if (! $key) {
+            throw new \RuntimeException('Failed to derive encryption key.');
+        }
+
+        $encrypted = sodium_crypto_secretbox($privateKey, $salt, $key);
+
+        $this->encrypted_private_key = base64_encode($encrypted);
+        $this->private_key_salt      = base64_encode($salt);
+        $this->wallet_origin        = 'internal';
+    }
+
+    private function getMasterKey(string $password): string|false
+    {
+        $pepper = config('app.key');
+        $salt   = $this->user?->encryption_salt;
+        if (! $pepper || ! $salt) {
+            return false;
+        }
+
+        // Ensure salt is exactly 16 bytes (re-generate if invalid)
+        $decoded = base64_decode($salt, true);
+        if ($decoded === false || strlen($decoded) !== SODIUM_CRYPTO_PWHASH_SALTBYTES) {
+            $this->user->update([
+                'encryption_salt' => base64_encode(random_bytes(SODIUM_CRYPTO_PWHASH_SALTBYTES)),
+            ]);
+            $this->user->refresh();
+            $decoded = base64_decode($this->user->encryption_salt, true);
+        }
+
+        return sodium_crypto_pwhash(
+            SODIUM_CRYPTO_SECRETBOX_KEYBYTES,
+            $password . $pepper,
+            $decoded,
+            SODIUM_CRYPTO_PWHASH_OPSLIMIT_INTERACTIVE,
+            SODIUM_CRYPTO_PWHASH_MEMLIMIT_INTERACTIVE,
+        );
     }
 }

@@ -7,25 +7,23 @@ use App\Enums\TransactionStatus;
 use App\Exceptions\NonceConflictException;
 use App\Exceptions\TransactionBroadcastFailedException;
 use App\Models\Transaction;
-use App\Services\Crypto\EvmRpcService;
+use App\Services\Crypto\BlockchainNodeService;
 use Illuminate\Support\Facades\Log;
 
 class TransactionBroadcastService
 {
     public function __construct(
-        private readonly EvmRpcService $evmRpcService,
+        private readonly BlockchainNodeService $nodeService,
     ) {}
 
     public function broadcastSignedTransaction(string $rawTx, ChainType $chain): string
     {
         try {
-            $rpcUrl = config("crypto.rpc.{$chain->value}");
-            // call() returns the result directly and throws on failure
-            $txHash = $this->evmRpcService->call($rpcUrl, 'eth_sendRawTransaction', [$rawTx]);
+            $txHash = $this->nodeService->broadcastRawTransaction($chain, $rawTx);
 
             Log::info('Transaction broadcast successfully', [
                 'tx_hash' => $txHash,
-                'chain' => $chain->value,
+                'chain'   => $chain->value,
             ]);
 
             return $txHash;
@@ -45,21 +43,21 @@ class TransactionBroadcastService
         }
 
         try {
-            $chain = $transaction->chain_type; // already cast to ChainType enum by model
+            $chain  = $transaction->chain_type;
             $txHash = $this->broadcastSignedTransaction($signature, $chain);
 
             $transaction->update([
-                'tx_hash' => $txHash,
-                'status' => TransactionStatus::SUBMITTED,
-                'submitted_at' => now(),
-                'signing_method' => 'client',
+                'tx_hash'            => $txHash,
+                'status'             => TransactionStatus::SUBMITTED,
+                'submitted_at'       => now(),
+                'signing_method'     => 'client',
                 'broadcast_attempts' => $transaction->broadcast_attempts + 1,
             ]);
 
             return $transaction->fresh();
         } catch (\Exception $e) {
             $transaction->update([
-                'error_message' => $e->getMessage(),
+                'error_message'      => $e->getMessage(),
                 'broadcast_attempts' => $transaction->broadcast_attempts + 1,
             ]);
 
@@ -74,23 +72,23 @@ class TransactionBroadcastService
         }
 
         try {
-            $chain = $transaction->chain_type; // already cast to ChainType enum by model
+            $chain = $transaction->chain_type;
             $rawTx = $this->signTransaction($transaction);
 
             $txHash = $this->broadcastSignedTransaction($rawTx, $chain);
 
             $transaction->update([
-                'tx_hash' => $txHash,
-                'status' => TransactionStatus::SUBMITTED,
-                'submitted_at' => now(),
-                'signing_method' => 'backend',
+                'tx_hash'            => $txHash,
+                'status'             => TransactionStatus::SUBMITTED,
+                'submitted_at'       => now(),
+                'signing_method'     => 'backend',
                 'broadcast_attempts' => $transaction->broadcast_attempts + 1,
             ]);
 
             return $transaction->fresh();
         } catch (\Exception $e) {
             $transaction->update([
-                'error_message' => $e->getMessage(),
+                'error_message'      => $e->getMessage(),
                 'broadcast_attempts' => $transaction->broadcast_attempts + 1,
             ]);
 
@@ -101,37 +99,29 @@ class TransactionBroadcastService
     public function handleNonceConflict(Transaction $transaction): Transaction
     {
         try {
-            $chain = $transaction->chain_type; // already cast to ChainType enum by model
-            $rpcUrl = config("crypto.rpc.{$chain->value}");
-
-            $hexNonce = $this->evmRpcService->call($rpcUrl, 'eth_getTransactionCount', [
-                $transaction->from_address,
-                'pending',
-            ]);
-
-            $currentNonce = hexdec((string) $hexNonce);
+            $chain        = $transaction->chain_type;
+            $currentNonce = $this->getNextNonce($transaction->from_address, $chain);
 
             Log::info('Nonce conflict detected, retrying with correct nonce', [
                 'transaction_id' => $transaction->id,
-                'current_nonce' => $currentNonce,
+                'current_nonce'  => $currentNonce,
             ]);
 
-            // Re-sign and broadcast with correct nonce
-            $rawTx = $this->signTransaction($transaction, $currentNonce);
+            $rawTx  = $this->signTransaction($transaction, $currentNonce);
             $txHash = $this->broadcastSignedTransaction($rawTx, $chain);
 
             $transaction->update([
-                'tx_hash' => $txHash,
-                'status' => TransactionStatus::SUBMITTED,
+                'tx_hash'      => $txHash,
+                'status'       => TransactionStatus::SUBMITTED,
                 'submitted_at' => now(),
-                'retry_count' => $transaction->retry_count + 1,
+                'retry_count'  => $transaction->retry_count + 1,
             ]);
 
             return $transaction->fresh();
         } catch (\Exception $e) {
             Log::error('Failed to handle nonce conflict', [
                 'transaction_id' => $transaction->id,
-                'error' => $e->getMessage(),
+                'error'          => $e->getMessage(),
             ]);
             throw new NonceConflictException('Failed to handle nonce conflict: ' . $e->getMessage());
         }
@@ -139,10 +129,6 @@ class TransactionBroadcastService
 
     private function signTransaction(Transaction $transaction, ?int $nonce = null): string
     {
-        // In production, this would use the actual private key signing logic
-        // For now, return a placeholder
-        // This requires integration with a proper signing library or blockchain node service
-
         Log::warning('Backend signing not fully implemented', [
             'transaction_id' => $transaction->id,
         ]);
@@ -153,18 +139,12 @@ class TransactionBroadcastService
     public function getNextNonce(string $address, ChainType $chain): int
     {
         try {
-            $rpcUrl = config("crypto.rpc.{$chain->value}");
-            $hexNonce = $this->evmRpcService->call($rpcUrl, 'eth_getTransactionCount', [
-                $address,
-                'pending',
-            ]);
-
-            return hexdec((string) $hexNonce);
+            return $this->nodeService->getNonce($chain, $address);
         } catch (\Exception $e) {
             Log::error('Failed to get next nonce', [
                 'address' => $address,
-                'chain' => $chain->value,
-                'error' => $e->getMessage(),
+                'chain'   => $chain->value,
+                'error'   => $e->getMessage(),
             ]);
             throw new TransactionBroadcastFailedException('Failed to get nonce: ' . $e->getMessage());
         }

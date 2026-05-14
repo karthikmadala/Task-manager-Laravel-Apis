@@ -10,9 +10,13 @@ use App\Repositories\Contracts\TransactionRepositoryInterface;
 use App\Repositories\Contracts\WalletRepositoryInterface;
 use App\Repositories\Eloquent\TransactionRepository;
 use App\Repositories\Eloquent\WalletRepository;
+use App\Services\Crypto\BlockchainInfoService;
 use App\Services\Crypto\Contracts\EvmRpcServiceInterface;
 use App\Services\Crypto\EvmRpcService;
+use App\Services\Crypto\WalletGenerationService;
 use App\Services\GasEstimationService;
+use App\Services\ICOService;
+use App\Services\StakingService;
 use App\Services\TransactionBroadcastService;
 use App\Services\TransactionMonitorService;
 use Illuminate\Cache\RateLimiting\Limit;
@@ -42,6 +46,12 @@ class AppServiceProvider extends ServiceProvider
         $this->app->singleton(GasEstimationService::class);
         $this->app->singleton(TransactionBroadcastService::class);
         $this->app->singleton(TransactionMonitorService::class);
+
+        // New blockchain + protocol services
+        $this->app->singleton(BlockchainInfoService::class);
+        $this->app->singleton(WalletGenerationService::class);
+        $this->app->singleton(StakingService::class);
+        $this->app->singleton(ICOService::class);
     }
 
     public function boot(): void

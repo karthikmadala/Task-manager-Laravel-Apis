@@ -138,4 +138,41 @@ return [
         'retry_delay_seconds'      => 10,
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Smart Contract Addresses
+    |--------------------------------------------------------------------------
+    | Addresses for the staking and ICO contracts per chain.
+    | Set per environment via .env (testnet vs mainnet differ).
+    */
+    'contracts' => [
+        'staking' => [
+            'eth'     => env('STAKING_CONTRACT_ETH'),
+            'bnb'     => env('STAKING_CONTRACT_BNB',     '0xa02FBC26C1E462d00E43DCb5F71DB24Defaf15e4'),
+            'polygon' => env('STAKING_CONTRACT_POLYGON'),
+        ],
+        'ico' => [
+            'eth'     => env('ICO_CONTRACT_ETH'),
+            'bnb'     => env('ICO_CONTRACT_BNB',         '0x9898632526238ca652c4Fc84E3C719e4C37fcdf3'),
+            'polygon' => env('ICO_CONTRACT_POLYGON'),
+        ],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Protocol / Service Wallet Keys
+    |--------------------------------------------------------------------------
+    | Private keys for backend-operated service wallets.
+    | NEVER commit real keys — load from secrets manager or .env only.
+    | These wallets perform ICO signing and protocol-level staking.
+    */
+    'staking' => [
+        'signer_key' => env('STAKING_SIGNER_KEY'),
+    ],
+
+    'ico' => [
+        'signer_key' => env('ICO_SIGNER_KEY'),   // signs purchase authorizations
+        'buyer_key'  => env('ICO_BUYER_KEY'),    // backend-signed buy (admin use)
+    ],
+
 ];

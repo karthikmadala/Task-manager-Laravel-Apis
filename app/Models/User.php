@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
@@ -18,6 +19,9 @@ class User extends Authenticatable
         'email',
         'password',
         'role',
+        'menu_restrictions',
+        'role_id',
+        'encryption_salt',
     ];
 
     protected $hidden = [
@@ -28,9 +32,10 @@ class User extends Authenticatable
     protected function casts(): array
     {
         return [
-            'email_verified_at' => 'datetime',
-            'password' => 'hashed',
-            'deleted_at' => 'datetime',
+            'email_verified_at'  => 'datetime',
+            'password'           => 'hashed',
+            'deleted_at'         => 'datetime',
+            'menu_restrictions'  => 'array',
         ];
     }
 
@@ -61,8 +66,52 @@ class User extends Authenticatable
         return $this->hasMany(Transaction::class);
     }
 
+    public function role(): \Illuminate\Database\Eloquent\Relations\BelongsTo
+    {
+        return $this->belongsTo(Role::class);
+    }
+
     public function isAdmin(): bool
     {
         return $this->role === 'admin';
+    }
+
+    public function isSuperAdmin(): bool
+    {
+        $r = $this->role()->first();
+        return $r && $r->is_super_admin;
+    }
+
+    public function roles(): BelongsToMany
+    {
+        return $this->belongsToMany(Role::class, 'role_user');
+    }
+
+    public function hasPermissionTo(string $permission): bool
+    {
+        $r = $this->role()->with('permissions')->first();
+        if ($r && $r->is_super_admin) {
+            return true;
+        }
+
+        if ($this->role === 'super_admin') {
+            return true;
+        }
+
+        if ($r) {
+            return $r->permissions->contains('name', $permission);
+        }
+
+        return false;
+    }
+
+    public function hasAnyPermission(array $permissions): bool
+    {
+        foreach ($permissions as $permission) {
+            if ($this->hasPermissionTo($permission)) {
+                return true;
+            }
+        }
+        return false;
     }
 }

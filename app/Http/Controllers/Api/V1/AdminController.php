@@ -32,7 +32,8 @@ class AdminController extends Controller
             });
         }
 
-        $users = $query->orderBy('created_at', 'desc')
+        $users = $query->withCount('wallets')
+            ->orderBy('created_at', 'desc')
             ->paginate($request->integer('per_page', 20));
 
         return api_response(true, 'Users retrieved', [
@@ -138,8 +139,9 @@ class AdminController extends Controller
      *
      * Returns details for a specific user: user info, wallets with portfolio, and transactions (optionally filtered by chain).
      */
-    public function userDetails(User $user, Request $request): JsonResponse
+    public function userDetails(string $userId, Request $request): JsonResponse
     {
+        $user = User::findOrFail($userId);
         $chain = $request->query('chain');
         $chainEnum = null;
         if ($chain) {
@@ -203,10 +205,78 @@ class AdminController extends Controller
             ];
         });
 
+        $internalWalletCount = $user->wallets()->where('wallet_origin', 'internal')->count();
+
         return api_response(true, 'User details retrieved.', [
+            'user'                  => new UserResource($user),
+            'wallet_count'          => $wallets->count(),
+            'internal_wallet_count' => $internalWalletCount,
+            'max_internal_wallets'  => 3,
+            'wallets'               => $walletData,
+            'transactions'          => $transactions,
+        ]);
+    }
+
+    /**
+     * GET /api/v1/admin/transactions
+     *
+     * Returns platform-wide transactions, optionally filtered by status.
+     * Default: pending + submitted (unresolved) transactions only.
+     */
+    public function transactions(Request $request): JsonResponse
+    {
+        $statuses = $request->query('status')
+            ? explode(',', $request->query('status'))
+            : ['pending', 'submitted', 'failed'];
+
+        $query = Transaction::with(['wallet', 'token'])
+            ->whereIn('status', $statuses)
+            ->orderBy('created_at', 'desc')
+            ->limit($request->integer('limit', 100));
+
+        $transactions = $query->get()->map(fn (Transaction $tx) => [
+            'id'                 => $tx->id,
+            'tx_hash'            => $tx->tx_hash,
+            'from_address'       => $tx->from_address,
+            'to_address'         => $tx->to_address,
+            'amount'             => $tx->amount,
+            'chain_type'         => $tx->chain_type->value,
+            'status'             => $tx->status->value,
+            'signing_method'     => $tx->signing_method,
+            'gas_used'           => $tx->gas_used,
+            'gas_price_gwei'     => $tx->gas_price_gwei,
+            'gas_limit'          => $tx->gas_limit,
+            'fee_usd'            => $tx->fee_usd,
+            'block_number'       => $tx->block_number,
+            'confirmations_count'=> $tx->confirmations_count,
+            'error_message'      => $tx->error_message,
+            'submitted_at'       => $tx->submitted_at?->toISOString(),
+            'confirmed_at'       => $tx->confirmed_at?->toISOString(),
+            'created_at'         => $tx->created_at?->toISOString(),
+            'updated_at'         => $tx->updated_at?->toISOString(),
+            'user_id'            => $tx->user_id,
+            'wallet_address'     => $tx->wallet?->address,
+            'token'              => $tx->token ? [
+                'symbol'   => $tx->token->symbol,
+                'name'     => $tx->token->name,
+                'decimals' => $tx->token->decimals,
+            ] : null,
+        ]);
+
+        return api_response(true, 'Transactions retrieved', ['transactions' => $transactions]);
+    }
+
+    /** PATCH /api/v1/admin/users/{userId}/menu-restrictions */
+    public function updateMenuRestrictions(Request $request, string $userId): JsonResponse
+    {
+        $user = User::findOrFail($userId);
+        $validated = $request->validate([
+            'menu_restrictions'   => 'required|array',
+            'menu_restrictions.*' => 'string|in:portfolio,transactions,wallets,staking,ico,profile',
+        ]);
+        $user->update(['menu_restrictions' => $validated['menu_restrictions']]);
+        return api_response(true, 'Menu restrictions updated.', [
             'user' => new UserResource($user),
-            'wallets' => $walletData,
-            'transactions' => $transactions,
         ]);
     }
 
@@ -300,6 +370,75 @@ class AdminController extends Controller
         $token->enabled = $validated['enabled'];
         $token->save();
         return api_response(true, 'Token status updated', ['token' => $token]);
+    }
+
+    /**
+     * GET /api/v1/admin/analytics
+     * Returns demographics and usage statistics for the admin dashboard.
+     * Query param: ?days=30 (clamped 7–90, default 30)
+     */
+    public function analytics(Request $request): JsonResponse
+    {
+        $days = (int) $request->query('days', 30);
+        $days = max(7, min(90, $days));
+
+        $since = now()->subDays($days)->startOfDay();
+
+        // User registrations by day
+        $usersByDay = User::where('created_at', '>=', $since)
+            ->selectRaw('DATE(created_at) as date, COUNT(*) as count')
+            ->groupBy('date')
+            ->orderBy('date')
+            ->pluck('count', 'date');
+
+        // Transactions by day (count + volume)
+        $txsByDay = Transaction::where('created_at', '>=', $since)
+            ->selectRaw('DATE(created_at) as date, COUNT(*) as count, SUM(CAST(amount AS DECIMAL(30,8))) as volume')
+            ->groupBy('date')
+            ->orderBy('date')
+            ->get()
+            ->keyBy('date');
+
+        // Chain distribution (wallet count per chain)
+        $chainDist = Wallet::selectRaw('chain_type, COUNT(*) as count')
+            ->groupBy('chain_type')
+            ->pluck('count', 'chain_type');
+
+        // Top tokens by transaction count
+        $topTokens = Transaction::with('token')
+            ->whereNotNull('token_id')
+            ->selectRaw('token_id, COUNT(*) as tx_count, SUM(CAST(amount AS DECIMAL(30,8))) as total_volume')
+            ->groupBy('token_id')
+            ->orderByDesc('tx_count')
+            ->limit(10)
+            ->get()
+            ->map(fn ($row) => [
+                'token_id'     => $row->token_id,
+                'symbol'       => $row->token?->symbol,
+                'name'         => $row->token?->name,
+                'tx_count'     => $row->tx_count,
+                'total_volume' => $row->total_volume,
+            ]);
+
+        // Total counts
+        $totalUsers         = User::count();
+        $totalWallets       = Wallet::count();
+        $totalTransactions  = Transaction::count();
+        $newUsersThisPeriod = User::where('created_at', '>=', $since)->count();
+
+        return api_response(true, 'Analytics retrieved', [
+            'period_days' => $days,
+            'totals' => [
+                'users'        => $totalUsers,
+                'wallets'      => $totalWallets,
+                'transactions' => $totalTransactions,
+                'new_users'    => $newUsersThisPeriod,
+            ],
+            'users_by_day'       => $usersByDay,
+            'txs_by_day'         => $txsByDay->map(fn ($r) => ['count' => $r->count, 'volume' => $r->volume]),
+            'chain_distribution' => $chainDist,
+            'top_tokens'         => $topTokens,
+        ]);
     }
 
 }

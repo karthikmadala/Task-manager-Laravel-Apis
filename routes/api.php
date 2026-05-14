@@ -2,12 +2,16 @@
 
 use App\Http\Controllers\Api\V1\AdminController;
 use App\Http\Controllers\Api\V1\AuthController;
+use App\Http\Controllers\Api\V1\BlockchainController;
 use App\Http\Controllers\Api\V1\ChainInfoController;
 use App\Http\Controllers\Api\V1\HealthController;
+use App\Http\Controllers\Api\V1\ICOController;
 use App\Http\Controllers\Api\V1\PortfolioController;
 use App\Http\Controllers\Api\V1\ProfileController;
+use App\Http\Controllers\Api\V1\StakingController;
 use App\Http\Controllers\Api\V1\TransactionController;
 use App\Http\Controllers\Api\V1\WalletController;
+use App\Http\Controllers\Api\V1\WalletGenerationController;
 use Illuminate\Support\Facades\Route;
 
 Route::prefix('v1')->group(function (): void {
@@ -68,19 +72,78 @@ Route::prefix('v1')->group(function (): void {
             });
         });
 
+        // ── Blockchain read-only queries ──────────────────────────────────────
+        Route::prefix('blockchain')->group(function (): void {
+            Route::get('token-details', [BlockchainController::class, 'tokenDetails']);
+            Route::post('balance', [BlockchainController::class, 'erc20Balance']);
+            Route::post('native-balance', [BlockchainController::class, 'nativeBalance']);
+            Route::post('receipt', [BlockchainController::class, 'transactionReceipt']);
+            Route::get('gas-price/{chain}', [BlockchainController::class, 'gasPrice']);
+        });
+
+        // ── Wallet generation ─────────────────────────────────────────────────
+        Route::prefix('wallet-gen')->group(function (): void {
+            Route::get('mnemonic', [WalletGenerationController::class, 'mnemonic']);
+            Route::post('address', [WalletGenerationController::class, 'createAddress']);
+            Route::post('internal', [WalletGenerationController::class, 'createInternalWallet']);
+            Route::post('reveal-key', [WalletGenerationController::class, 'revealKey']);
+        });
+
+        // ── Staking (prepare for MetaMask signing) ────────────────────────────
+        Route::prefix('staking')->group(function (): void {
+            Route::get('user', [StakingController::class, 'userDetails']);
+            Route::get('plan', [StakingController::class, 'planDetails']);
+            Route::middleware('throttle:broadcast')->group(function (): void {
+                Route::post('prepare/stake', [StakingController::class, 'prepareStake']);
+                Route::post('prepare/withdraw', [StakingController::class, 'prepareWithdraw']);
+            });
+        });
+
+        // ── ICO (prepare for MetaMask signing) ───────────────────────────────
+        Route::prefix('ico')->group(function (): void {
+            Route::middleware('throttle:broadcast')->group(function (): void {
+                Route::post('buy/prepare', [ICOController::class, 'prepareBuyTokens']);
+                Route::post('buy', [ICOController::class, 'selfServiceBuyTokens']);
+            });
+        });
+
         Route::middleware('role:admin')->group(function (): void {
             Route::get('admin/health', [HealthController::class, 'admin']);
-            Route::get('admin/users', [AdminController::class, 'users']);
-            Route::get('admin/users/{user}', [AdminController::class, 'userDetails']);
-            Route::get('admin/logs', [AdminController::class, 'logs']);
-            Route::get('admin/wallets', [AdminController::class, 'wallets']);
-            Route::get('admin/tokens', [AdminController::class, 'tokens']);
-            Route::post('admin/tokens', [AdminController::class, 'createToken']);
-            Route::put('admin/tokens/{token}', [AdminController::class, 'updateToken']);
-            Route::delete('admin/tokens/{token}', [AdminController::class, 'deleteToken']);
-            Route::patch('admin/tokens/{token}/status', [AdminController::class, 'toggleTokenStatus']);
-            // Admin‑only chain metadata endpoint
-            Route::get('chains', [ChainInfoController::class, 'index']);
+            Route::get('admin/users', [AdminController::class, 'users'])
+                ->middleware('permission:users.view');
+            Route::get('admin/users/{userId}', [AdminController::class, 'userDetails'])
+                ->middleware('permission:users.view');
+            Route::patch('admin/users/{userId}/menu-restrictions', [AdminController::class, 'updateMenuRestrictions'])
+                ->middleware('permission:users.edit');
+            Route::get('admin/logs', [AdminController::class, 'logs'])
+                ->middleware('permission:admin.access');
+            Route::get('admin/wallets', [AdminController::class, 'wallets'])
+                ->middleware('permission:wallets.view');
+            Route::get('admin/transactions', [AdminController::class, 'transactions'])
+                ->middleware('permission:transactions.view');
+            Route::get('admin/tokens', [AdminController::class, 'tokens'])
+                ->middleware('permission:tokens.view');
+            Route::post('admin/tokens', [AdminController::class, 'createToken'])
+                ->middleware('permission:tokens.create');
+            Route::put('admin/tokens/{token}', [AdminController::class, 'updateToken'])
+                ->middleware('permission:tokens.edit');
+            Route::delete('admin/tokens/{token}', [AdminController::class, 'deleteToken'])
+                ->middleware('permission:tokens.delete');
+            Route::patch('admin/tokens/{token}/status', [AdminController::class, 'toggleTokenStatus'])
+                ->middleware('permission:tokens.toggle');
+            // Admin-only chain metadata endpoint
+            // Route::get('chains', [ChainInfoController::class, 'index']);
+            // Admin wallet generation (full key pair)
+            Route::post('admin/wallet-gen/keypair', [WalletGenerationController::class, 'createKeypair']);
+            // Admin staking (backend-signed, uses service wallet)
+            Route::post('admin/staking/stake', [StakingController::class, 'executeStake']);
+            Route::post('admin/staking/withdraw', [StakingController::class, 'executeWithdraw']);
+            // Admin ICO (backend-signed)
+            Route::post('admin/ico/sign', [ICOController::class, 'createSign']);
+            Route::post('admin/ico/buy', [ICOController::class, 'executeBuyTokens']);
+            // Admin analytics dashboard
+            Route::get('admin/analytics', [AdminController::class, 'analytics'])
+                ->middleware('permission:admin.access');
         });
     });
 
