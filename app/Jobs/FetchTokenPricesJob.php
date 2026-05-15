@@ -13,6 +13,7 @@ class FetchTokenPricesJob implements ShouldQueue
 {
     use Queueable;
 
+    public string $queue = 'default';
     public int $tries = 3;
 
     public array $backoff = [30, 60, 120];

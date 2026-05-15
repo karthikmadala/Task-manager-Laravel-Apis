@@ -8,6 +8,9 @@ use App\Exceptions\NonceConflictException;
 use App\Exceptions\TransactionBroadcastFailedException;
 use App\Models\Transaction;
 use App\Services\Crypto\BlockchainNodeService;
+use App\Support\Crypto\RlpEncoder;
+use Elliptic\EC;
+use kornrunner\Keccak;
 use Illuminate\Support\Facades\Log;
 
 class TransactionBroadcastService
@@ -129,11 +132,92 @@ class TransactionBroadcastService
 
     private function signTransaction(Transaction $transaction, ?int $nonce = null): string
     {
-        Log::warning('Backend signing not fully implemented', [
-            'transaction_id' => $transaction->id,
-        ]);
+        $chain = $transaction->chain_type;
 
-        throw new TransactionBroadcastFailedException('Backend signing requires integration with blockchain node service or private key management');
+        if (!$chain->isEvm()) {
+            throw new TransactionBroadcastFailedException(
+                'Backend signing is only supported for EVM chains. Use client-side signing for ' . $chain->value . '.'
+            );
+        }
+
+        $serviceKey = config('crypto.ico.buyer_key') ?: config('crypto.staking.signer_key');
+
+        if (!$serviceKey) {
+            throw new TransactionBroadcastFailedException(
+                'No service wallet key configured (ICO_BUYER_KEY or STAKING_SIGNER_KEY). Use client-side signing for this transaction.'
+            );
+        }
+
+        $txNonce = $nonce ?? $this->getNextNonce($transaction->from_address, $chain);
+
+        $chainId = (int) match ($chain) {
+            ChainType::ETH     => config('crypto.chains.eth.chain_id', 1),
+            ChainType::BNB     => config('crypto.chains.bnb.chain_id', 56),
+            ChainType::POLYGON => config('crypto.chains.polygon.chain_id', 137),
+        };
+
+        if ($transaction->gas_price_gwei && bccomp((string) $transaction->gas_price_gwei, '0', 8) > 0) {
+            $gasPrice = bcmul((string) $transaction->gas_price_gwei, '1000000000', 0);
+        } else {
+            try {
+                $gasPriceData = $this->nodeService->getGasPrice($chain);
+                $gasPrice = $gasPriceData['gasPrice'] ?? (string) (20 * 1_000_000_000);
+            } catch (\Throwable) {
+                $gasPrice = (string) (20 * 1_000_000_000);
+            }
+        }
+
+        $gasLimit = $transaction->gas_limit && bccomp((string) $transaction->gas_limit, '0', 8) > 0
+            ? bcmul((string) $transaction->gas_limit, '1', 0)
+            : ($transaction->contract_address ? '300000' : '21000');
+
+        $rawAmount = (string) $transaction->amount;
+        $weiValue  = str_contains($rawAmount, '.') ? bcmul($rawAmount, '1', 0) : $rawAmount;
+        $weiValue  = ($weiValue === '' || $weiValue === '0') ? '0' : $weiValue;
+
+        $data = $transaction->method_signature ? ltrim($transaction->method_signature, '0x') : '';
+
+        $privateKey = ltrim($serviceKey, '0x');
+
+        $toBytes  = $transaction->to_address ? hex2bin(ltrim($transaction->to_address, '0x')) : '';
+        $dataBytes = $data ? hex2bin($data) : '';
+
+        $rlpPreSign = [
+            RlpEncoder::intToBytes($txNonce),
+            RlpEncoder::intToBytes($gasPrice),
+            RlpEncoder::intToBytes($gasLimit),
+            $toBytes,
+            RlpEncoder::intToBytes($weiValue),
+            $dataBytes,
+            RlpEncoder::intToBytes($chainId),
+            '',
+            '',
+        ];
+
+        $rlpEncoded = RlpEncoder::encode($rlpPreSign);
+        $hash = Keccak::hash($rlpEncoded, 256);
+
+        $ec = new EC('secp256k1');
+        $keyPair = $ec->keyFromPrivate($privateKey, 'hex');
+        $sig = $keyPair->sign($hash, ['canonical' => true]);
+
+        $r = str_pad($sig->r->toString(16), 64, '0', STR_PAD_LEFT);
+        $s = str_pad($sig->s->toString(16), 64, '0', STR_PAD_LEFT);
+        $v = $sig->recoveryParam + 2 * $chainId + 35;
+
+        $rlpSigned = [
+            RlpEncoder::intToBytes($txNonce),
+            RlpEncoder::intToBytes($gasPrice),
+            RlpEncoder::intToBytes($gasLimit),
+            $toBytes,
+            RlpEncoder::intToBytes($weiValue),
+            $dataBytes,
+            RlpEncoder::intToBytes($v),
+            hex2bin($r),
+            hex2bin($s),
+        ];
+
+        return '0x' . bin2hex(RlpEncoder::encode($rlpSigned));
     }
 
     public function getNextNonce(string $address, ChainType $chain): int

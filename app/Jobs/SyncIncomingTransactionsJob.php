@@ -13,6 +13,7 @@ class SyncIncomingTransactionsJob implements ShouldQueue, ShouldBeUnique
 {
     use Queueable;
 
+    public string $queue = 'low';
     public int $tries = 3;
 
     public int $timeout = 300;

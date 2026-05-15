@@ -76,9 +76,12 @@ class WalletRepository implements WalletRepositoryInterface
         return $wallet->fresh();
     }
 
-    public function updateNonce(Wallet $wallet, string $nonce): void
+    public function updateNonce(Wallet $wallet, string $nonce, ?\Carbon\Carbon $expiresAt = null): void
     {
-        $wallet->forceFill(['metamask_nonce' => $nonce])->save();
+        $wallet->forceFill([
+            'metamask_nonce'            => $nonce,
+            'metamask_nonce_expires_at' => $expiresAt ?? now()->addMinutes(10),
+        ])->save();
     }
 
     public function delete(Wallet $wallet): void

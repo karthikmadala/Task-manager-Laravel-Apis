@@ -33,3 +33,7 @@ Schedule::job(new FetchTokenPricesJob)
     ->withoutOverlapping(5)
     ->onOneServer()
     ->name('fetch-token-prices');
+
+Schedule::call(function () {
+    \App\Models\IcoUsedNonce::pruneExpired();
+})->hourly()->name('ico:prune-nonces')->withoutOverlapping();

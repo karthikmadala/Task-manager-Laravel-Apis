@@ -17,6 +17,7 @@ class UpdateWalletBalancesJob implements ShouldQueue
      * PortfolioService::syncWallet() is exception-safe, so retries only occur
      * when the job itself throws (e.g. DB unavailable, DI resolution failure).
      */
+    public string $queue = 'low';
     public int $tries = 3;
 
     /**

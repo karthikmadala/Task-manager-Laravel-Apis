@@ -416,6 +416,63 @@ class BlockchainNodeService
     }
 
     /**
+     * Fetch USD prices for a list of CoinGecko IDs.
+     * Returns [ 'ethereum' => 3200.50, 'bitcoin' => 65000.0, ... ]
+     *
+     * @param  string[]  $coinGeckoIds
+     * @return array<string, float|null>
+     * @throws BlockchainException
+     */
+    public function getPrices(array $coinGeckoIds): array
+    {
+        $response = $this->post('/prices', ['ids' => array_values($coinGeckoIds)]);
+        return $response['prices'] ?? [];
+    }
+
+    /**
+     * Fetch native token USD price (ETH/BNB/MATIC) from the explorer stats endpoint.
+     *
+     * @throws BlockchainException
+     */
+    public function getNativePrice(ChainType $chain): ?float
+    {
+        try {
+            $response = $this->get('/native-price/' . $this->nodeChain($chain), []);
+            $price = $response['price_usd'] ?? null;
+            return $price !== null ? (float) $price : null;
+        } catch (BlockchainException) {
+            return null;
+        }
+    }
+
+    /**
+     * Fetch BTC balance via BlockCypher.
+     * Returns satoshi-denominated balance strings.
+     *
+     * @return array{ balance: string, unconfirmed_balance: string, final_balance: string }
+     * @throws BlockchainException
+     */
+    public function getBtcBalance(string $address): array
+    {
+        return $this->post('/btc-balance', ['address' => $address]);
+    }
+
+    /**
+     * Fetch Etherscan-style gas oracle for a chain.
+     * Returns { safe, propose, fast, base_fee } in Gwei, or null if unavailable.
+     *
+     * @return array{safe: string, propose: string, fast: string, base_fee: string}|null
+     */
+    public function getGasOracle(ChainType $chain): ?array
+    {
+        try {
+            return $this->get('/gas-oracle/' . $this->nodeChain($chain), []);
+        } catch (BlockchainException) {
+            return null;
+        }
+    }
+
+    /**
      * Fetch native + ERC-20 balances via the node's fallback chain
      * (Alchemy → Explorer → RPC) in a single call.
      *

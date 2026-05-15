@@ -6,6 +6,7 @@ use App\Enums\ChainType;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Api\V1\Blockchain\BalanceRequest;
 use App\Http\Requests\Api\V1\Blockchain\NativeBalanceRequest;
+use App\Http\Requests\Api\V1\Blockchain\NonceRequest;
 use App\Http\Requests\Api\V1\Blockchain\TokenDetailsRequest;
 use App\Http\Requests\Api\V1\Blockchain\TransactionReceiptRequest;
 use App\Services\Crypto\BlockchainInfoService;
@@ -83,6 +84,21 @@ class BlockchainController extends Controller
         }
 
         return api_response(true, 'Transaction receipt retrieved.', $data);
+    }
+
+    /**
+     * POST /blockchain/nonce
+     * Returns the next pending nonce for an address via Node POST /getNonce
+     */
+    public function nonce(NonceRequest $request)
+    {
+        $chain = ChainType::from($request->validated('chain'));
+        $nonce = $this->blockchain->getNonce(
+            $request->validated('address'),
+            $chain
+        );
+
+        return api_response(true, 'Nonce retrieved.', ['nonce' => $nonce]);
     }
 
     /**

@@ -14,6 +14,7 @@ class MonitorPendingTransactionsJob implements ShouldQueue, ShouldBeUnique
 {
     use Queueable;
 
+    public string $queue = 'critical';
     public int $tries = 3;
 
     public int $timeout = 180;

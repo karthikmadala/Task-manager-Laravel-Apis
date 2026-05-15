@@ -24,6 +24,7 @@ class Wallet extends Model
         'address',
         'label',
         'metamask_nonce',
+        'metamask_nonce_expires_at',
         'encrypted_private_key',
         'private_key_salt',
         'wallet_origin',
@@ -31,15 +32,16 @@ class Wallet extends Model
         'last_synced_block',
     ];
 
-    protected $hidden = ['metamask_nonce', 'encrypted_private_key', 'private_key_salt'];
+    protected $hidden = ['metamask_nonce', 'metamask_nonce_expires_at', 'encrypted_private_key', 'private_key_salt'];
 
     protected function casts(): array
     {
         return [
-            'chain_type'  => ChainType::class,
-            'wallet_type' => WalletType::class,
-            'is_active'   => 'boolean',
-            'deleted_at'  => 'datetime',
+            'chain_type'                => ChainType::class,
+            'wallet_type'               => WalletType::class,
+            'is_active'                 => 'boolean',
+            'deleted_at'                => 'datetime',
+            'metamask_nonce_expires_at' => 'datetime',
         ];
     }
 
@@ -147,14 +149,9 @@ class Wallet extends Model
             return false;
         }
 
-        // Ensure salt is exactly 16 bytes (re-generate if invalid)
         $decoded = base64_decode($salt, true);
         if ($decoded === false || strlen($decoded) !== SODIUM_CRYPTO_PWHASH_SALTBYTES) {
-            $this->user->update([
-                'encryption_salt' => base64_encode(random_bytes(SODIUM_CRYPTO_PWHASH_SALTBYTES)),
-            ]);
-            $this->user->refresh();
-            $decoded = base64_decode($this->user->encryption_salt, true);
+            return false;
         }
 
         return sodium_crypto_pwhash(

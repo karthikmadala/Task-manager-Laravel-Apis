@@ -100,7 +100,7 @@ class WalletService
                 'is_active'   => false, // activated after signature verified
             ]);
 
-        $this->walletRepository->updateNonce($wallet, $nonce);
+        $this->walletRepository->updateNonce($wallet, $nonce, now()->addMinutes(10));
 
         return $nonce;
     }
@@ -122,6 +122,13 @@ class WalletService
         // getRawOriginal bypasses the $hidden guard to access the nonce
         $nonce = $wallet->getRawOriginal('metamask_nonce');
 
+        $nonceExpiresAt = $wallet->getRawOriginal('metamask_nonce_expires_at');
+        if ($nonceExpiresAt && \Carbon\Carbon::parse($nonceExpiresAt)->isPast()) {
+            throw ValidationException::withMessages([
+                'address' => ['Nonce has expired. Please request a new nonce.'],
+            ]);
+        }
+
         if (! $this->signatureService->verifySignature($nonce, $signature, $address)) {
             throw ValidationException::withMessages([
                 'signature' => ['Signature verification failed.'],
@@ -129,7 +136,7 @@ class WalletService
         }
 
         return DB::transaction(function () use ($wallet): Wallet {
-            $this->walletRepository->updateNonce($wallet, $this->signatureService->generateNonce());
+            $this->walletRepository->updateNonce($wallet, $this->signatureService->generateNonce(), now()->addMinutes(10));
 
             $wallet->forceFill(['is_active' => true])->save();
 
@@ -153,7 +160,7 @@ class WalletService
         }
 
         $nonce = $this->signatureService->generateNonce();
-        $this->walletRepository->updateNonce($wallet, $nonce);
+        $this->walletRepository->updateNonce($wallet, $nonce, now()->addMinutes(10));
 
         return $nonce;
     }
@@ -180,6 +187,13 @@ class WalletService
             ]);
         }
 
+        $nonceExpiresAt = $wallet->getRawOriginal('metamask_nonce_expires_at');
+        if ($nonceExpiresAt && \Carbon\Carbon::parse($nonceExpiresAt)->isPast()) {
+            throw ValidationException::withMessages([
+                'address' => ['Nonce has expired. Please request a new nonce.'],
+            ]);
+        }
+
         if (! $this->signatureService->verifySignature($nonce, $signature, $address)) {
             throw ValidationException::withMessages([
                 'signature' => ['Signature verification failed.'],
@@ -187,7 +201,7 @@ class WalletService
         }
 
         return DB::transaction(function () use ($wallet): User {
-            $this->walletRepository->updateNonce($wallet, $this->signatureService->generateNonce());
+            $this->walletRepository->updateNonce($wallet, $this->signatureService->generateNonce(), now()->addMinutes(10));
 
             return $wallet->user()->firstOrFail();
         });

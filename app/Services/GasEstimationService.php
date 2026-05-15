@@ -7,6 +7,7 @@ use App\DTOs\TransactionDto;
 use App\Enums\ChainType;
 use App\Exceptions\GasEstimationFailedException;
 use App\Models\Token;
+use App\Services\Crypto\BlockchainNodeService;
 use App\Services\Crypto\ExplorerService;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
@@ -15,6 +16,7 @@ class GasEstimationService
 {
     public function __construct(
         private readonly ExplorerService $explorerService,
+        private readonly BlockchainNodeService $node,
     ) {}
 
     public function estimateGas(TransactionDto $dto): GasEstimate
@@ -66,6 +68,14 @@ class GasEstimationService
         $cacheTtl = config('transaction.gas.cache_ttl', 30);
 
         return Cache::remember($cacheKey, $cacheTtl, function () use ($chain) {
+            // Try node_api_base gas oracle first (Etherscan via node)
+            $oracle = $this->node->getGasOracle($chain);
+
+            if ($oracle !== null) {
+                return $oracle;
+            }
+
+            // Fallback to direct explorer call
             $oracle = $this->explorerService->getGasOracle($chain);
 
             if ($oracle !== null) {

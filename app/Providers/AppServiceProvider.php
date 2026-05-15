@@ -52,6 +52,7 @@ class AppServiceProvider extends ServiceProvider
         $this->app->singleton(WalletGenerationService::class);
         $this->app->singleton(StakingService::class);
         $this->app->singleton(ICOService::class);
+        $this->app->singleton(\App\Services\AuditLogService::class);
     }
 
     public function boot(): void

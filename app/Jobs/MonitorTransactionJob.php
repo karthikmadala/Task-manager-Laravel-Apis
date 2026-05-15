@@ -13,6 +13,7 @@ class MonitorTransactionJob implements ShouldQueue
 {
     use Queueable;
 
+    public string $queue = 'critical';
     public int $tries = 3;
     public int $timeout = 120;
 

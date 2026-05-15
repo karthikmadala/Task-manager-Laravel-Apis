@@ -79,6 +79,7 @@ Route::prefix('v1')->group(function (): void {
             Route::post('native-balance', [BlockchainController::class, 'nativeBalance']);
             Route::post('receipt', [BlockchainController::class, 'transactionReceipt']);
             Route::get('gas-price/{chain}', [BlockchainController::class, 'gasPrice']);
+            Route::post('nonce', [BlockchainController::class, 'nonce']);
         });
 
         // ── Wallet generation ─────────────────────────────────────────────────

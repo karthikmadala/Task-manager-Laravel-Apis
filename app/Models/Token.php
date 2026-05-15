@@ -32,7 +32,7 @@ class Token extends Model
             'chain_type'        => ChainType::class,
             'decimals'          => 'integer',
             'chain_id'          => 'integer',
-            'current_price_usd' => 'float',
+            'current_price_usd' => 'decimal:18',
             'price_updated_at'  => 'datetime',
             'enabled'           => 'boolean',
             'deleted_at'        => 'datetime',

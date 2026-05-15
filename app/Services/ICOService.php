@@ -4,9 +4,12 @@ namespace App\Services;
 
 use App\Enums\ChainType;
 use App\Exceptions\ICOException;
+use App\Models\IcoUsedNonce;
 use App\Services\Crypto\BlockchainNodeService;
 use App\Support\Crypto\AbiEncoder;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Redis;
 
 /**
  * ICO contract interactions.
@@ -47,18 +50,32 @@ class ICOService
             $cryptoValue,
         );
 
+        $nonce      = (int) Redis::incr("ico_nonce:{$callerAddress}");
+        $expiresAt  = now()->addSeconds(60);
+
+        DB::transaction(function () use ($nonce, $callerAddress, $expiresAt): void {
+            IcoUsedNonce::consume(
+                (string) $nonce,
+                $callerAddress,
+                auth()->id(),
+                $expiresAt,
+            );
+        });
+
         Log::info('ICO purchase signature created', [
             'index'     => $index,
             'recipient' => $recipientAddress,
             'caller'    => $callerAddress,
             'chain'     => $chain->value,
+            'nonce'     => $nonce,
         ]);
 
         return [
-            'v'     => $sig['v'],
-            'r'     => '0x' . $sig['r'],
-            's'     => '0x' . $sig['s'],
-            'nonce' => time(),
+            'v'          => $sig['v'],
+            'r'          => '0x' . $sig['r'],
+            's'          => '0x' . $sig['s'],
+            'nonce'      => $nonce,
+            'expires_at' => $expiresAt->timestamp,
         ];
     }
 

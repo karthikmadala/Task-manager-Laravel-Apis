@@ -88,9 +88,15 @@ class BlockchainInfoService
             try {
                 $data = $this->node->getGasPrice($chain);
 
+                $gasPriceWei = $data['gasPrice'] ?? null;
+                $gasPriceGwei = $gasPriceWei !== null
+                    ? bcdiv((string) $gasPriceWei, '1000000000', 9)
+                    : null;
+
                 return [
                     'chain'           => $chain->value,
-                    'gas_price_wei'   => $data['gasPrice'] ?? null,
+                    'gas_price_wei'   => $gasPriceWei,
+                    'gas_price_gwei'  => $gasPriceGwei,
                     'max_fee_per_gas' => $data['maxFeePerGas'] ?? null,
                 ];
             } catch (BlockchainException $e) {
@@ -99,10 +105,19 @@ class BlockchainInfoService
                 return [
                     'chain'           => $chain->value,
                     'gas_price_wei'   => null,
+                    'gas_price_gwei'  => null,
                     'max_fee_per_gas' => null,
                     'error'           => 'Gas price temporarily unavailable',
                 ];
             }
         });
+    }
+
+    /**
+     * Get the next pending transaction nonce for an address.
+     */
+    public function getNonce(string $address, ChainType $chain): int
+    {
+        return $this->node->getNonce($chain, $address);
     }
 }

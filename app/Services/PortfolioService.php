@@ -8,7 +8,6 @@ use App\Models\User;
 use App\Models\Wallet;
 use App\Models\WalletBalance;
 use App\Services\Crypto\BlockchainNodeService;
-use App\Services\Crypto\BlockCypherService;
 use App\Services\Crypto\ExplorerService;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
@@ -34,7 +33,6 @@ class PortfolioService
     public function __construct(
         private readonly BlockchainNodeService $node,
         private readonly ExplorerService       $explorer,
-        private readonly BlockCypherService    $blockCypher,
     ) {}
 
     // ─── Public API ──────────────────────────────────────────────────────────
@@ -125,7 +123,7 @@ $tokens = Token::where('chain_type', $chain->value)->where('enabled', true)->get
                 : $this->fetchEvmRawBalances($address, $chain, $tokens);
             $priceMap = $chain === ChainType::BTC
                 ? []
-                : $this->explorer->getUsdPriceMapForTokens($address, $chain, $tokens);
+                : $this->buildNodePriceMap($chain, $tokens);
 
             return $tokens->map(function (Token $token) use ($rawBalances, $priceMap, $chain): array {
                 $raw      = $rawBalances[$token->id] ?? '0';
@@ -274,7 +272,7 @@ $tokens = Token::where('chain_type', $chain->value)->where('enabled', true)->get
             return [];
         }
 
-        $data = $this->blockCypher->getBalance($address);
+        $data = $this->node->getBtcBalance($address);
 
         return [$btcToken->id => $data['final_balance']];
     }
@@ -337,7 +335,7 @@ $tokens = Token::where('chain_type', $chain->value)->where('enabled', true)->get
 
             foreach ($walletPortfolio['balances'] as $balance) {
                 $grouped[$addressKey]['balances'][] = array_merge($balance, [
-                    'chain' => $wallet['chain_type'],
+                    'chain' => $balance['chain_type'] ?? $wallet['chain_type'],
                 ]);
             }
         }
@@ -435,7 +433,7 @@ $tokens = Token::where('chain_type', $chain->value)->where('enabled', true)->get
             : $this->fetchEvmRawBalances($wallet->address, $chain, $tokens);
         $priceMap = $chain === ChainType::BTC
             ? []
-            : $this->explorer->getUsdPriceMapForTokens($wallet->address, $chain, $tokens);
+            : $this->buildNodePriceMap($chain, $tokens);
 
         foreach ($tokens as $token) {
             $raw      = $rawBalances[$token->id] ?? '0';
@@ -455,6 +453,50 @@ $tokens = Token::where('chain_type', $chain->value)->where('enabled', true)->get
     /**
      * @return array<int, ChainType>
      */
+    /**
+     * Build price map using node_api_base (CoinGecko + explorer native price).
+     * Returns [ '__native__:eth' => 3200.0, '0xcontract' => 1.0, ... ]
+     *
+     * @param  Collection<int, Token>  $tokens
+     * @return array<string, float|null>
+     */
+    private function buildNodePriceMap(ChainType $chain, Collection $tokens): array
+    {
+        $priceMap = [];
+        $coinGeckoIds = [];
+
+        foreach ($tokens as $token) {
+            if ($token->isNative()) {
+                $priceMap[$this->explorer->nativePriceMapKey($chain)] = null;
+            } else {
+                $priceMap[strtolower((string) $token->contract_address)] = null;
+                if ($token->coingecko_id) {
+                    $coinGeckoIds[$token->coingecko_id] = strtolower((string) $token->contract_address);
+                }
+            }
+        }
+
+        // Native price via node
+        $nativePrice = $this->node->getNativePrice($chain);
+        $priceMap[$this->explorer->nativePriceMapKey($chain)] = $nativePrice;
+
+        // ERC-20 prices via CoinGecko through node
+        if (! empty($coinGeckoIds)) {
+            try {
+                $prices = $this->node->getPrices(array_keys($coinGeckoIds));
+                foreach ($coinGeckoIds as $geckoId => $contract) {
+                    if (isset($prices[$geckoId])) {
+                        $priceMap[$contract] = $prices[$geckoId] !== null ? (float) $prices[$geckoId] : null;
+                    }
+                }
+            } catch (\Throwable $e) {
+                Log::warning('Node price fetch failed', ['error' => $e->getMessage()]);
+            }
+        }
+
+        return $priceMap;
+    }
+
     private function evmChains(): array
     {
         return [ChainType::ETH, ChainType::BNB, ChainType::POLYGON];

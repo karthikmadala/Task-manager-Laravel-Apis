@@ -15,9 +15,14 @@ use App\Services\TransactionService;
 use App\Enums\ChainType;
 use App\Http\Resources\WalletResource;
 use App\Services\PortfolioService;
+use App\Services\AuditLogService;
 
 class AdminController extends Controller
 {
+    public function __construct(
+        private readonly AuditLogService $auditLogService,
+    ) {}
+
     /**
      * GET /api/v1/admin/users
      */
@@ -274,7 +279,10 @@ class AdminController extends Controller
             'menu_restrictions'   => 'required|array',
             'menu_restrictions.*' => 'string|in:portfolio,transactions,wallets,staking,ico,profile',
         ]);
+        $before = ['menu_restrictions' => $user->menu_restrictions];
         $user->update(['menu_restrictions' => $validated['menu_restrictions']]);
+        $after = ['menu_restrictions' => $validated['menu_restrictions']];
+        $this->auditLogService->logUserChange($user->id, $before, $after, 'updated');
         return api_response(true, 'Menu restrictions updated.', [
             'user' => new UserResource($user),
         ]);
@@ -283,7 +291,7 @@ class AdminController extends Controller
     /** GET /api/v1/admin/tokens */
     public function tokens(): JsonResponse
     {
-        $tokens = Token::all();
+        $tokens = Token::all()->map(fn (Token $t) => $this->tokenResponse($t));
         return api_response(true, 'Tokens retrieved', ['tokens' => $tokens]);
     }
 
@@ -291,23 +299,25 @@ class AdminController extends Controller
     public function createToken(Request $request): JsonResponse
     {
         $validated = $request->validate([
-            'symbol' => 'required|string|max:10',
-            'name' => 'required|string|max:100',
-            'chain_type' => 'required|string',
-            'contract' => 'nullable|string',
-            'decimals' => 'required|integer',
+            'symbol'            => 'required|string|max:10',
+            'name'              => 'required|string|max:100',
+            'chain_type'        => 'required|string',
+            'contract'          => 'nullable|string',
+            'coingecko_id'      => 'nullable|string|max:100',
+            'decimals'          => 'required|integer',
             'current_price_usd' => 'nullable|numeric',
-            'enabled' => 'required|boolean',
+            'enabled'           => 'required|boolean',
         ]);
 
         $attributes = [
-            'symbol' => $validated['symbol'],
-            'name' => $validated['name'],
-            'chain_type' => $validated['chain_type'],
-            'contract_address' => $validated['contract'] ?? null,
-            'decimals' => $validated['decimals'],
+            'symbol'            => $validated['symbol'],
+            'name'              => $validated['name'],
+            'chain_type'        => $validated['chain_type'],
+            'contract_address'  => $validated['contract'] ?? null,
+            'coingecko_id'      => $validated['coingecko_id'] ?? null,
+            'decimals'          => $validated['decimals'],
             'current_price_usd' => $validated['current_price_usd'] ?? null,
-            'enabled' => $validated['enabled'],
+            'enabled'           => $validated['enabled'],
         ];
 
         $token = Token::withTrashed()
@@ -316,6 +326,7 @@ class AdminController extends Controller
             ->first();
 
         if ($token) {
+            $before = $token->toArray();
             $token->fill($attributes);
 
             if ($token->trashed()) {
@@ -323,43 +334,51 @@ class AdminController extends Controller
             }
 
             $token->save();
+            $this->auditLogService->logTokenChange($token->id, $before, $token->fresh()->toArray(), 'created');
 
-            return api_response(true, 'Token restored', ['token' => $token]);
+            return api_response(true, 'Token restored', ['token' => $this->tokenResponse($token)]);
         }
 
         $token = Token::create($attributes);
+        $this->auditLogService->logTokenChange($token->id, [], $token->fresh()->toArray(), 'created');
 
-        return api_response(true, 'Token created', ['token' => $token]);
+        return api_response(true, 'Token created', ['token' => $this->tokenResponse($token)]);
     }
 
     /** PUT /api/v1/admin/tokens/{token} */
     public function updateToken(Request $request, Token $token): JsonResponse
     {
         $validated = $request->validate([
-            'symbol' => 'sometimes|required|string|max:10',
-            'name' => 'sometimes|required|string|max:100',
-            'chain_type' => 'sometimes|required|string',
-            'contract' => 'nullable|string',
-            'decimals' => 'sometimes|required|integer',
+            'symbol'            => 'sometimes|required|string|max:10',
+            'name'              => 'sometimes|required|string|max:100',
+            'chain_type'        => 'sometimes|required|string',
+            'contract'          => 'nullable|string',
+            'coingecko_id'      => 'nullable|string|max:100',
+            'decimals'          => 'sometimes|required|integer',
             'current_price_usd' => 'nullable|numeric',
-            'enabled' => 'sometimes|required|boolean',
+            'enabled'           => 'sometimes|required|boolean',
         ]);
+        $before = $token->toArray();
         $token->update([
-            'symbol' => $validated['symbol'] ?? $token->symbol,
-            'name' => $validated['name'] ?? $token->name,
-            'chain_type' => $validated['chain_type'] ?? $token->chain_type,
-            'contract_address' => $validated['contract'] ?? $token->contract_address,
-            'decimals' => $validated['decimals'] ?? $token->decimals,
+            'symbol'            => $validated['symbol'] ?? $token->symbol,
+            'name'              => $validated['name'] ?? $token->name,
+            'chain_type'        => $validated['chain_type'] ?? $token->chain_type,
+            'contract_address'  => $validated['contract'] ?? $token->contract_address,
+            'coingecko_id'      => $validated['coingecko_id'] ?? $token->coingecko_id,
+            'decimals'          => $validated['decimals'] ?? $token->decimals,
             'current_price_usd' => $validated['current_price_usd'] ?? $token->current_price_usd,
-            'enabled' => $validated['enabled'] ?? $token->enabled,
+            'enabled'           => $validated['enabled'] ?? $token->enabled,
         ]);
-        return api_response(true, 'Token updated', ['token' => $token]);
+        $this->auditLogService->logTokenChange($token->id, $before, $token->fresh()->toArray(), 'updated');
+        return api_response(true, 'Token updated', ['token' => $this->tokenResponse($token)]);
     }
 
     /** DELETE /api/v1/admin/tokens/{token} */
     public function deleteToken(Token $token): JsonResponse
     {
+        $before = $token->toArray();
         $token->delete();
+        $this->auditLogService->logTokenChange($token->id, $before, [], 'deleted');
         return api_response(true, 'Token deleted');
     }
 
@@ -367,9 +386,27 @@ class AdminController extends Controller
     public function toggleTokenStatus(Request $request, Token $token): JsonResponse
     {
         $validated = $request->validate(['enabled' => 'required|boolean']);
+        $before = $token->toArray();
         $token->enabled = $validated['enabled'];
         $token->save();
-        return api_response(true, 'Token status updated', ['token' => $token]);
+        $this->auditLogService->logTokenChange($token->id, $before, $token->fresh()->toArray(), 'status_changed');
+        return api_response(true, 'Token status updated', ['token' => $this->tokenResponse($token)]);
+    }
+
+    private function tokenResponse(Token $token): array
+    {
+        return [
+            'id'                => $token->id,
+            'symbol'            => $token->symbol,
+            'name'              => $token->name,
+            'chain_type'        => $token->chain_type instanceof \App\Enums\ChainType ? $token->chain_type->value : $token->chain_type,
+            'chain_id'          => $token->chain_id,
+            'contract'          => $token->contract_address,
+            'coingecko_id'      => $token->coingecko_id,
+            'decimals'          => $token->decimals,
+            'current_price_usd' => $token->current_price_usd,
+            'enabled'           => (bool) $token->enabled,
+        ];
     }
 
     /**

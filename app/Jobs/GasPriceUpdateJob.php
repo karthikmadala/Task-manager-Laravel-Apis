@@ -13,6 +13,7 @@ class GasPriceUpdateJob implements ShouldQueue
 {
     use Queueable;
 
+    public string $queue = 'default';
     public int $tries = 2;
     public int $timeout = 30;
 

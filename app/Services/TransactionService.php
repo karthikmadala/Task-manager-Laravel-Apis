@@ -249,16 +249,34 @@ class TransactionService
 
     private function validateSufficientBalance(Wallet $wallet, TransactionDto $dto): void
     {
-        $balance = $this->getWalletBalance($wallet, $dto->chain);
-
         if ($dto->isNativeTransfer()) {
-            // For native transfers, check if wallet has enough balance
+            $balance = $this->getWalletBalance($wallet, $dto->chain);
             if (bccomp($balance, $dto->amount, 18) < 0) {
                 throw new InsufficientBalanceException($dto->amount, $balance, $dto->chain->nativeSymbol());
             }
+            return;
         }
-        // For ERC-20 transfers, we'd need to check token balance
-        // This is simplified for now
+
+        if (isset($dto->contractAddress) && $dto->contractAddress) {
+            $token = \App\Models\Token::where('contract_address', strtolower($dto->contractAddress))->first();
+            if ($token) {
+                $balance  = $this->getTokenBalance($wallet, $dto->contractAddress, $dto->chain);
+                $decimals = (int) $token->decimals;
+                if (bccomp($balance, $dto->amount, $decimals) < 0) {
+                    throw new InsufficientBalanceException($dto->amount, $balance, $token->symbol);
+                }
+            }
+        }
+    }
+
+    private function getTokenBalance(Wallet $wallet, string $contractAddress, ChainType $chain): string
+    {
+        $balance = $wallet->balances()
+            ->where('chain_type', $chain->value)
+            ->whereHas('token', fn($q) => $q->where('contract_address', strtolower($contractAddress)))
+            ->first();
+
+        return $balance ? (string) $balance->balance : '0';
     }
 
     private function getWalletBalance(Wallet $wallet, ?ChainType $chain = null): string
